@@ -241,11 +241,11 @@ nativeModule:
       schema:
         target: { type: string, description: "Actor id (required)" }
     actor_set:
-      description: "Set a UProperty on a live PIE actor by dotted path (Component.Struct.Property), coerced from the JSON value. This is the write half of snapshot's reflection read."
+      description: "Set a UProperty on a live PIE actor by dotted path (Component.Struct.Property), coerced through ImportText. This is the write half of snapshot's reflection read."
       schema:
         target: { type: string, description: "Actor id (required)" }
         path:   { type: string, description: "Dotted property path, e.g. Health or Movement.MaxWalkSpeed (required)" }
-        value:  { description: "Value to write (number, bool, string, or enum name); coerced via ImportText (required)" }
+        value:  { type: string, description: "Value to write, as text: \"100\", \"true\", \"EMyEnum::Foo\", \"(X=1,Y=2)\" (required)" }
     actor_call:
       description: "Invoke a callable UFUNCTION on a live PIE actor, importing args positionally into its parameters."
       schema:
