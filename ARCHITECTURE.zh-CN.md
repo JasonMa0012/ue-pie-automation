@@ -6,15 +6,15 @@
 
 | 路径 | 职责 |
 |---|---|
-| `UEPIEAutomation.uplugin` | Editor 插件清单，依赖 `ModelContextProtocol`、`EnhancedInput` |
-| `Source/UEPIEAutomation/UEPIEAutomation.Build.cs` | UE 模块依赖，包含原生 MCP、编辑器、Slate、JSON 和输入模块 |
-| `Source/UEPIEAutomation/Private/UEPIEAutomation.cpp` | 模块启动、PIE 生命周期服务、原生 MCP 注册、编辑器 UI 注册 |
-| `Source/UEPIEAutomation/Private/MCP/` | 原生 MCP 工具包装与工具注册表 |
-| `Source/UEPIEAutomation/Private/Handlers/` | 参数校验、业务 Handler、资产操作和 JSON 快照序列化 |
-| `Source/UEPIEAutomation/Private/PIE/` | 录制、回放、逐帧采样、注入、观察、日志、偏差、捕获和文件格式 |
-| `Source/UEPIEAutomation/Private/UI/` | 工具栏按钮和可停靠 UE PIE Automation 面板 |
-| `Source/UEPIEAutomation/Private/Tests/` | UE Automation 测试 |
-| `Resources/UEPIEAutomationTools.json` | 52 个原生 MCP 工具的描述和输入 JSON Schema |
+| `UE_PIE_Automation.uplugin` | Editor 插件清单，依赖 `ModelContextProtocol`、`EnhancedInput` |
+| `Source/UE_PIE_Automation/UE_PIE_Automation.Build.cs` | UE 模块依赖，包含原生 MCP、编辑器、Slate、JSON 和输入模块 |
+| `Source/UE_PIE_Automation/Private/UE_PIE_Automation.cpp` | 模块启动、PIE 生命周期服务、原生 MCP 注册、编辑器 UI 注册 |
+| `Source/UE_PIE_Automation/Private/MCP/` | 原生 MCP 工具包装与工具注册表 |
+| `Source/UE_PIE_Automation/Private/Handlers/` | 参数校验、业务 Handler、资产操作和 JSON 快照序列化 |
+| `Source/UE_PIE_Automation/Private/PIE/` | 录制、回放、逐帧采样、注入、观察、日志、偏差、捕获和文件格式 |
+| `Source/UE_PIE_Automation/Private/UI/` | 工具栏按钮和可停靠 UE PIE Automation 面板 |
+| `Source/UE_PIE_Automation/Private/Tests/` | UE Automation 测试 |
+| `Resources/UE_PIE_AutomationTools.json` | 52 个原生 MCP 工具的描述和输入 JSON Schema |
 
 仓库不再包含 Node/npm 工程，也不要求外部桥接模块。它没有独立 `.uproject`；编译和运行依赖宿主 UE 工程。
 
@@ -24,7 +24,7 @@
 flowchart TD
     Client[MCP 客户端] --> UE[UE 原生 MCP HTTP 服务]
     UE --> Tools[IModelContextProtocolTool]
-    Tools --> Registry[FUEPIEAutomationMCPRegistry]
+    Tools --> Registry[FUE_PIE_AutomationMCPRegistry]
     Registry --> Handlers[FGameplayHandlers]
     Handlers --> Services[PIE 核心服务]
     UI[UE 工具栏 / 面板] --> Services
@@ -33,7 +33,7 @@ flowchart TD
     Services --> Capture[视口帧 / Contact Sheet]
 ```
 
-UE 原生 MCP 负责 HTTP、MCP 握手、工具发现和工具调用。插件只实现 `IModelContextProtocolTool` 包装层：从 `UEPIEAutomationTools.json` 读取描述和参数 schema，把调用切到游戏线程，再转发到原有 Handler。返回值通过 `MakeStructuredContentResult` 保留 JSON 结构；`success=false` 会转换成原生 MCP 的 `isError=true`。
+UE 原生 MCP 负责 HTTP、MCP 握手、工具发现和工具调用。插件只实现 `IModelContextProtocolTool` 包装层：从 `UE_PIE_AutomationTools.json` 读取描述和参数 schema，把调用切到游戏线程，再转发到原有 Handler。返回值通过 `MakeStructuredContentResult` 保留 JSON 结构；`success=false` 会转换成原生 MCP 的 `isError=true`。
 
 工具名称是 `PIEStudio.<action>`，例如：
 
@@ -48,7 +48,7 @@ UE 原生 MCP 负责 HTTP、MCP 握手、工具发现和工具调用。插件只
 
 ## 模块关系
 
-`FUEPIEAutomationModule::StartupModule` 初始化输入注入器、录制器、回放器、观察器和会话日志，注册工具栏与面板，再创建 `FUEPIEAutomationMCPRegistry`。关闭模块时先注销 MCP 工具，再清理 PIE 服务。
+`FUE_PIE_AutomationModule::StartupModule` 初始化输入注入器、录制器、回放器、观察器和会话日志，注册工具栏与面板，再创建 `FUE_PIE_AutomationMCPRegistry`。关闭模块时先注销 MCP 工具，再清理 PIE 服务。
 
 `FGameplayHandlers` 是稳定的业务边界。录制、回放、观察、日志、捕获、性能、测试、Actor 操作和场景处理代码仍使用原有 `TSharedPtr<FJsonValue> Handler(const TSharedPtr<FJsonObject>&)` 签名；迁移没有把业务状态机改成另一套接口。
 
@@ -83,18 +83,18 @@ Saved/MCPRecordings/<id>/
 
 ## 工具规模与接口
 
-当前 `Resources/UEPIEAutomationTools.json` 与 C++ Handler 表各包含 52 个工具：输入注入 5 个、录制 8 个、回放/分析 7 个、测试/断言 4 个、差异/快照 2 个、Actor 4 个、场景 2 个、观察配置 5 个、观察会话 6 个、运行时检查 3 个、日志 2 个、性能 3 个、独立捕获 1 个。
+当前 `Resources/UE_PIE_AutomationTools.json` 与 C++ Handler 表各包含 54 个工具：输入注入 5 个、录制 8 个、回放/分析 9 个（含参考帧保存和 PNG 差异比较）、测试/断言 4 个、差异/快照 2 个、Actor 4 个、场景 2 个、观察配置 5 个、观察会话 6 个、运行时检查 3 个、日志 2 个、性能 3 个、独立捕获 1 个。
 
-新增动作需要同时完成三件事：在 `GameplayHandlers.h/.cpp` 中实现 Handler；在 `UEPIEAutomationMCPRegistry.cpp` 加入函数指针映射；在 `Resources/UEPIEAutomationTools.json` 加入同名工具和输入 schema。工具名使用 `PIEStudio.<action>`，Handler 内部仍使用裸 action 名。
+新增动作需要同时完成三件事：在 `GameplayHandlers.h/.cpp` 中实现 Handler；在 `UE_PIE_AutomationMCPRegistry.cpp` 加入函数指针映射；在 `Resources/UE_PIE_AutomationTools.json` 加入同名工具和输入 schema。工具名使用 `PIEStudio.<action>`，Handler 内部仍使用裸 action 名。
 
 ## 验证记录
 
 本次使用目录 Junction 将仓库安装到：
 
 ```text
-E:/Workspace/_UE/Blank_5_8/Plugins/UEPIEAutomation
+E:/Workspace/_UE/Blank_5_8/Plugins/UE_PIE_Automation
 ```
 
-UE 5.8 Editor target 编译通过。`UEPIEAutomation` Automation suite 找到并通过 11 个测试。原生 MCP 端点完成 initialize 握手，`tools/list` 返回 52 个 UE PIE Automation 工具及 schema；`record_status` 返回结构化 JSON，缺少 `record_read.id` 时返回 `isError=true`。随后通过同一个 MCP 端点启动 PIE、录制 351 帧、停止录制并回放，生成 `drift.json`，比较帧数为 351。
+UE 5.8 Editor target 编译通过。`UE_PIE_Automation` Automation suite 找到并通过 11 个测试。原生 MCP 端点完成 initialize 握手，`tools/list` 返回 54 个 UE PIE Automation 工具及 schema；`record_status` 返回结构化 JSON，缺少 `record_read.id` 时返回 `isError=true`。`reference_save` 和 `frame_diff` 通过同一原生端点提供参考帧复制和 PNG 差异比较。
 
 验证工程的原生 MCP 服务地址为 `http://127.0.0.1:8000/mcp`；其他编辑器占用端口时可使用 `-ModelContextProtocolPort=<port>`。

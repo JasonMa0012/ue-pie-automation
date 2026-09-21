@@ -6,8 +6,8 @@ UE PIE Automation's contract is a tight observe → hypothesize → reproduce �
 
 - `FPIEInputRecorder`, `FPIEInputReplayer`, `FPIEObserver`, `FPIEFrameSampler`, `FPIEInputInjector` and the file format remain the behavior core.
 - `FGameplayHandlers` remains the JSON-facing service layer.
-- `FUEPIEAutomationMCPRegistry` exposes those handlers as native `PIEStudio.*` tools through `IModelContextProtocolModule`.
-- Tool descriptions and schemas are kept in `Resources/UEPIEAutomationTools.json`.
+- `FUE_PIE_AutomationMCPRegistry` exposes those handlers as native `PIEStudio.*` tools through `IModelContextProtocolModule`.
+- Tool descriptions and schemas are kept in `Resources/UE_PIE_AutomationTools.json`.
 - Artifacts land under the host project's `Saved/MCPRecordings`, `Saved/MCPObservations`, `Saved/MCPSessions`, `Saved/MCPCaptures` and `Saved/MCPTraces` directories.
 
 ## Next useful increments

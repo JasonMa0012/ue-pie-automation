@@ -6,8 +6,8 @@ The plugin now targets Unreal Engine 5.8's native Model Context Protocol server.
 
 | Area | Status |
 |---|---|
-| Native MCP tool registration | Done: 52 `PIEStudio.*` tools through `IModelContextProtocolModule` |
-| Native MCP schemas | Done: `Resources/UEPIEAutomationTools.json` |
+| Native MCP tool registration | Done: 54 `PIEStudio.*` tools through `IModelContextProtocolModule` |
+| Native MCP schemas | Done: `Resources/UE_PIE_AutomationTools.json` |
 | Local bridge helper replacement | Done: parameter, result, asset creation and snapshot helpers are plugin-local |
 | PIE recorder/replayer/observer behavior | Preserved in the existing C++ services |
 | Editor toolbar and panel | Preserved |
@@ -19,9 +19,9 @@ The plugin now targets Unreal Engine 5.8's native Model Context Protocol server.
 Validated with a directory junction from:
 
 ```text
-E:/Workspace/_UE/Blank_5_8/Plugins/UEPIEAutomation
+E:/Workspace/_UE/Blank_5_8/Plugins/UE_PIE_Automation
 ```
 
-The UE 5.8 Editor target compiled successfully. The `UEPIEAutomation` Automation suite found and passed 11 tests. The native MCP endpoint completed an initialize handshake, listed 52 UE PIE Automation tools with schemas, returned structured `record_status`, and marked missing-parameter failures as MCP errors. A live PIE smoke run recorded 351 frames and replayed them through the native endpoint, producing `drift.json` with 351 compared frames.
+The UE 5.8 Editor target compiled successfully. The `UE_PIE_Automation` Automation suite found and passed 11 tests. The native MCP endpoint completed an initialize handshake, listed 54 UE PIE Automation tools with schemas, returned structured `record_status`, and marked missing-parameter failures as MCP errors. Replay now captures PNG frames on a fixed timestep and exposes native `reference_save` and `frame_diff` handlers.
 
 Build success, Automation success, native MCP success and live PIE success are separate checks; one does not substitute for another.
