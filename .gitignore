@@ -1,7 +1,4 @@
-node_modules/
 .codegraph/
-dist/
-*.tgz
 *.tmp
 .DS_Store
 

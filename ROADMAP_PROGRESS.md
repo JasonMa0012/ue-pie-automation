@@ -1,51 +1,27 @@
-# ROADMAP Implementation Progress
+# UE PIE Automation implementation status
 
-## Build + test method (all items verified)
+The plugin now targets Unreal Engine 5.8's native Model Context Protocol server. The repository root is the plugin root; there is no Node.js package, npm build, bridge module or external handler manifest.
 
-The user provided a ue-mcp-enabled project to build against:
-`C:\Users\david\Projects\UE\ue-mcp\tests\ue_mcp\ue_mcp.uproject` (UE 5.8, has the
-`UE_MCP_Bridge` plugin). The repo plugin is junctioned into that project's `Plugins/`
-so edits build directly.
+## Current implementation
 
-- **Build:** `Engine/Build/BatchFiles/Build.bat ue_mcpEditor Win64 Development -project=<uproject>`
-- **Test:** `UnrealEditor-Cmd.exe <uproject> -ExecCmds="Automation RunTests PIEStudio" -unattended -nullrhi -TestExit="Automation Test Queue Empty"`
+| Area | Status |
+|---|---|
+| Native MCP tool registration | Done: 52 `PIEStudio.*` tools through `IModelContextProtocolModule` |
+| Native MCP schemas | Done: `Resources/UEPIEAutomationTools.json` |
+| Local bridge helper replacement | Done: parameter, result, asset creation and snapshot helpers are plugin-local |
+| PIE recorder/replayer/observer behavior | Preserved in the existing C++ services |
+| Editor toolbar and panel | Preserved |
+| UE Automation coverage | 11 tests present; verified on UE 5.8 host |
+| Full declarative `scenario_run` orchestration | Not implemented; `scenario_scaffold` and `scenario_validate` remain available |
 
-Every item below is **DONE**: compiles clean against UE 5.8 + ue-mcp, and its automation
-test(s) pass. Final state: **8/8 PIEStudio automation tests green.**
+## Verification record
 
-`DONE` = built + tests pass on UE 5.8.
+Validated with a directory junction from:
 
-## Dependency order (execution plan)
+```text
+E:/Workspace/_UE/Blank_5_8/Plugins/UEPIEAutomation
+```
 
-1. **1a** session log/error capture — no deps
-2. **1b** capture pipeline — no deps
-3. **4a** perf sampling — no deps (extends frame sampler)
-4. **4b** Insights trace — no deps
-5. **2b** timeline introspection — deps: 1a conventions
-6. **1c** drift analysis — deps: 1a (error correlation), 1b (bracketing frames)
-7. **2a** state replay — deps: 1b (capture surface)
-8. **3a** functional test scaffolding — deps: 1a, 1b, 2a
-9. **cross-cutting docs** — after the features they document
+The UE 5.8 Editor target compiled successfully. The `UEPIEAutomation` Automation suite found and passed 11 tests. The native MCP endpoint completed an initialize handshake, listed 52 UE PIE Automation tools with schemas, returned structured `record_status`, and marked missing-parameter failures as MCP errors. A live PIE smoke run recorded 351 frames and replayed them through the native endpoint, producing `drift.json` with 351 compared frames.
 
-## Status
-
-| # | Item | Status | Test |
-|---|------|--------|------|
-| 1a | `FPIESessionLog` + `session_errors` + `session_log` | DONE (PR #2) | PIEStudio.SessionLog.CapturesErrorsAndWritesArtifacts |
-| 1b | JPEG + keep frames + GIF opt-in + contact sheet + `capture` | DONE (PR #2) | PIEStudio.ContactSheet.ComposesDecodableJpeg |
-| 1c | drift `summary` block + `replay_analyze` | DONE (PR #2) | PIEStudio.Drift.SummaryRoundTrips |
-| 2a | `replay_state` deterministic scrub/snapshot + apply | DONE (PR #2) | PIEStudio.StateReplay.ScrubInterpolates |
-| 2b | observer `observe_read` series + `sub:` subsystem sampling | DONE (PR #2) | PIEStudio.Observe.SeriesFromCsv |
-| 3a | `test_scaffold` + `test_run` + `test_list` | DONE (PR #2) | PIEStudio.ReproTest.ScaffoldListRun |
-| 4a | per-frame perf sampling + `perf_summary` | DONE (PR #2) | PIEStudio.Perf.SummaryFromCsv |
-| 4b | `trace_start`/`trace_stop` | DONE (PR #2) | PIEStudio.Perf.TraceStartStop |
-| X1 | determinism honesty in docs | DONE (PR #2) | n/a (docs) |
-| X2 | fixed-timestep knob (replay) | DONE (PR #2) | built (FApp save/restore) |
-| X3 | format v2 + backward-compatible readers | DONE (PR #2) | covered by Drift round-trip |
-| N1 | no Gauntlet embed (non-goal) | DONE | intentionally not built |
-| N2 | no lockstep determinism (non-goal) | DONE | intentionally not built |
-| N3 | DemoNetDriver deferred (non-goal) | DONE | intentionally not built |
-
-All C++ work lands on branch `roadmap-phase1-signal-and-surface` (PR #2). The 8 automation
-tests live under `Source/PIE_Studio/Private/Tests/`.
-</content>
+Build success, Automation success, native MCP success and live PIE success are separate checks; one does not substitute for another.

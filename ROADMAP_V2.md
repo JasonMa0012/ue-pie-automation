@@ -18,7 +18,7 @@ Everything below serves that bet. Determinism honesty from v1 is unchanged and l
 
 ## Status
 
-- **Phase A — Assertion layer: DONE (v0.5.x, this milestone).** Predicate language (channels, events, five temporal holds, windows, deadlines), `FPIEPredicateEvaluator`, `assert_eval`, predicate-aware `test_scaffold`/`test_run`, witness frames wired to contact sheets. Verified: `PIEStudio.Assertions.Predicates` + full suite green on UE 5.8. This was the necessary floor: without a real verdict there is nothing to validate, budget, or emit.
+- **Phase A — Assertion layer: DONE (v0.5.x, this milestone).** Predicate language (channels, events, five temporal holds, windows, deadlines), `FPIEPredicateEvaluator`, `assert_eval`, predicate-aware `test_scaffold`/`test_run`, witness frames wired to contact sheets. Verified: `UEPIEAutomation.Assertions.Predicates` + full suite green on UE 5.8. This was the necessary floor: without a real verdict there is nothing to validate, budget, or emit.
 
 ---
 

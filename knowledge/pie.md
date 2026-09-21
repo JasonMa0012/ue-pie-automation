@@ -1,6 +1,8 @@
 # PIE Record / Replay / Observe / Profile
 
-pie-studio provisions the `pie` category: deterministic PIE recording, replay,
+All actions below are native MCP tools named `PIEStudio.<action>`.
+
+UE PIE Automation provides deterministic PIE recording, replay,
 observation, diffing, snapshots, input injection, session-error capture, viewport
 capture, profiling, and self-verifying reproduction tests. Actions are unprefixed -
 the category is the namespace. Targets Unreal Engine 5.8.
