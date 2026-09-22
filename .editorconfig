@@ -1,0 +1,47 @@
+# EditorConfig is awesome: https://EditorConfig.org
+
+# top-most EditorConfig file
+root = true
+
+# All files
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# C++ files
+[*.{h,hpp,cpp,c,cc,cxx}]
+charset = utf-8
+indent_style = tab
+indent_size = 4
+
+# C# files
+[*.cs]
+charset = utf-8
+indent_style = tab
+indent_size = 4
+
+# Unreal Build files
+[*.Build.cs]
+charset = utf-8
+indent_style = tab
+indent_size = 4
+
+# JSON files
+[*.json]
+charset = utf-8
+indent_style = space
+indent_size = 4
+
+# INI files
+[*.ini]
+charset = utf-8
+indent_style = tab
+indent_size = 4
+
+# Markdown files
+[*.md]
+charset = utf-8
+indent_style = space
+indent_size = 2
