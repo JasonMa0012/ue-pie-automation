@@ -54,12 +54,6 @@ namespace UE_PIE_Automation
 			return true;
 		}
 
-		float QuantizeAxis(float V)
-		{
-			// 3-decimal rounding, consistent with the recorder's tape values.
-			return FMath::RoundToFloat(V * 1000.0f) / 1000.0f;
-		}
-
 		FString CSVEscape(const FString& In)
 		{
 			if (In.Contains(TEXT(",")) || In.Contains(TEXT("\"")) || In.Contains(TEXT("\n")))
@@ -121,25 +115,195 @@ namespace UE_PIE_Automation
 	{
 		switch (Type)
 		{
-		case EStepType::Input:     return TEXT("input");
-		case EStepType::Hold:      return TEXT("hold");
 		case EStepType::Capture:   return TEXT("capture");
 		case EStepType::Console:   return TEXT("console");
-		case EStepType::InputTape: return TEXT("input_tape");
 		case EStepType::Mark:      return TEXT("mark");
 		}
-		return TEXT("input");
+		return TEXT("mark");
 	}
 
 	bool ParseStepType(const FString& Str, EStepType& Out)
 	{
-		if (Str == TEXT("input"))      { Out = EStepType::Input;     return true; }
-		if (Str == TEXT("hold"))       { Out = EStepType::Hold;      return true; }
 		if (Str == TEXT("capture"))    { Out = EStepType::Capture;   return true; }
 		if (Str == TEXT("console"))    { Out = EStepType::Console;   return true; }
-		if (Str == TEXT("input_tape")) { Out = EStepType::InputTape; return true; }
 		if (Str == TEXT("mark"))       { Out = EStepType::Mark;      return true; }
 		return false;
+	}
+
+	FString InputEventTypeToString(EPIEInputEventType Type)
+	{
+		switch (Type)
+		{
+		case EPIEInputEventType::KeyDown: return TEXT("key_down");
+		case EPIEInputEventType::KeyUp: return TEXT("key_up");
+		case EPIEInputEventType::MouseMove: return TEXT("mouse_move");
+		case EPIEInputEventType::MouseButtonDown: return TEXT("mouse_button_down");
+		case EPIEInputEventType::MouseButtonUp: return TEXT("mouse_button_up");
+		case EPIEInputEventType::MouseDoubleClick: return TEXT("mouse_double_click");
+		case EPIEInputEventType::MouseWheel: return TEXT("mouse_wheel");
+		}
+		return FString();
+	}
+
+	bool ParseInputEventType(const FString& Str, EPIEInputEventType& Out)
+	{
+		if (Str == TEXT("key_down")) { Out = EPIEInputEventType::KeyDown; return true; }
+		if (Str == TEXT("key_up")) { Out = EPIEInputEventType::KeyUp; return true; }
+		if (Str == TEXT("mouse_move")) { Out = EPIEInputEventType::MouseMove; return true; }
+		if (Str == TEXT("mouse_button_down")) { Out = EPIEInputEventType::MouseButtonDown; return true; }
+		if (Str == TEXT("mouse_button_up")) { Out = EPIEInputEventType::MouseButtonUp; return true; }
+		if (Str == TEXT("mouse_double_click")) { Out = EPIEInputEventType::MouseDoubleClick; return true; }
+		if (Str == TEXT("mouse_wheel")) { Out = EPIEInputEventType::MouseWheel; return true; }
+		return false;
+	}
+
+	TSharedRef<FJsonObject> InputEventToJson(const FPIEInputEvent& Event)
+	{
+		TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
+		O->SetStringField(TEXT("type"), InputEventTypeToString(Event.Type));
+		O->SetNumberField(TEXT("time_seconds"), Event.TimeSeconds);
+		O->SetNumberField(TEXT("order"), Event.Order);
+		O->SetNumberField(TEXT("user_index"), Event.UserIndex);
+		O->SetNumberField(TEXT("pointer_index"), Event.PointerIndex);
+		O->SetBoolField(TEXT("shift"), Event.bShift);
+		O->SetBoolField(TEXT("control"), Event.bControl);
+		O->SetBoolField(TEXT("alt"), Event.bAlt);
+		O->SetBoolField(TEXT("command"), Event.bCommand);
+		O->SetBoolField(TEXT("caps_locked"), Event.bCapsLocked);
+
+		if (Event.Type == EPIEInputEventType::KeyDown || Event.Type == EPIEInputEventType::KeyUp)
+		{
+			O->SetStringField(TEXT("key"), Event.Key);
+			O->SetNumberField(TEXT("key_code"), Event.KeyCode);
+			O->SetBoolField(TEXT("repeat"), Event.bIsRepeat);
+		}
+		else
+		{
+			TArray<TSharedPtr<FJsonValue>> Pos;
+			Pos.Add(MakeShared<FJsonValueNumber>(Event.Position.X));
+			Pos.Add(MakeShared<FJsonValueNumber>(Event.Position.Y));
+			O->SetArrayField(TEXT("position"), Pos);
+			TArray<TSharedPtr<FJsonValue>> Delta;
+			Delta.Add(MakeShared<FJsonValueNumber>(Event.Delta.X));
+			Delta.Add(MakeShared<FJsonValueNumber>(Event.Delta.Y));
+			O->SetArrayField(TEXT("delta"), Delta);
+			O->SetStringField(TEXT("key"), Event.Key);
+			TArray<TSharedPtr<FJsonValue>> Buttons;
+			for (const FString& Button : Event.PressedButtons)
+			{
+				Buttons.Add(MakeShared<FJsonValueString>(Button));
+			}
+			O->SetArrayField(TEXT("pressed_buttons"), Buttons);
+			O->SetNumberField(TEXT("wheel_delta"), Event.WheelDelta);
+		}
+		return O;
+	}
+
+	bool ReadInputEvent(const TSharedPtr<FJsonValue>& Value, FPIEInputEvent& Out, FString& OutError)
+	{
+		const TSharedPtr<FJsonObject> O = Value.IsValid() ? Value->AsObject() : nullptr;
+		FString Type;
+		if (!O.IsValid() || !O->TryGetStringField(TEXT("type"), Type) || !ParseInputEventType(Type, Out.Type))
+		{
+			OutError = TEXT("input event has an invalid type");
+			return false;
+		}
+		if (!O->TryGetNumberField(TEXT("time_seconds"), Out.TimeSeconds) || !FMath::IsFinite(Out.TimeSeconds) || Out.TimeSeconds < 0.0
+			|| !O->TryGetNumberField(TEXT("order"), Out.Order) || Out.Order < 0)
+		{
+			OutError = TEXT("input event is missing a valid time or order");
+			return false;
+		}
+		double UserIndexValue = 0.0, PointerIndexValue = 0.0;
+		if (!O->TryGetNumberField(TEXT("user_index"), UserIndexValue) || !FMath::IsFinite(UserIndexValue) || UserIndexValue < 0.0 || UserIndexValue > MAX_uint32
+			|| !O->TryGetNumberField(TEXT("pointer_index"), PointerIndexValue) || !FMath::IsFinite(PointerIndexValue) || PointerIndexValue < 0.0 || PointerIndexValue > MAX_uint32
+			|| !O->TryGetBoolField(TEXT("shift"), Out.bShift)
+			|| !O->TryGetBoolField(TEXT("control"), Out.bControl)
+			|| !O->TryGetBoolField(TEXT("alt"), Out.bAlt)
+			|| !O->TryGetBoolField(TEXT("command"), Out.bCommand)
+			|| !O->TryGetBoolField(TEXT("caps_locked"), Out.bCapsLocked))
+		{
+			OutError = TEXT("input event is missing valid user, pointer, or modifier data");
+			return false;
+		}
+		Out.UserIndex = static_cast<uint32>(UserIndexValue);
+		Out.PointerIndex = static_cast<uint32>(PointerIndexValue);
+		double Number = 0.0;
+
+		if (Out.Type == EPIEInputEventType::KeyDown || Out.Type == EPIEInputEventType::KeyUp)
+		{
+			if (!O->TryGetStringField(TEXT("key"), Out.Key) || Out.Key.IsEmpty()
+				|| !O->TryGetNumberField(TEXT("key_code"), Number) || !FMath::IsFinite(Number)
+				|| Number < 0.0 || Number > MAX_uint32
+				|| !O->TryGetBoolField(TEXT("repeat"), Out.bIsRepeat))
+			{
+				OutError = TEXT("keyboard input event is missing key data");
+				return false;
+			}
+			Out.KeyCode = static_cast<uint32>(FMath::Max(0.0, Number));
+			return true;
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* Pos = nullptr;
+		const TArray<TSharedPtr<FJsonValue>>* Delta = nullptr;
+		const TArray<TSharedPtr<FJsonValue>>* Buttons = nullptr;
+		if (!O->TryGetArrayField(TEXT("position"), Pos) || !Pos || Pos->Num() != 2
+			|| !O->TryGetArrayField(TEXT("delta"), Delta) || !Delta || Delta->Num() != 2
+			|| !O->TryGetArrayField(TEXT("pressed_buttons"), Buttons) || !Buttons)
+		{
+			OutError = TEXT("pointer input event is missing position, delta, or pressed buttons");
+			return false;
+		}
+		double PositionX = 0.0, PositionY = 0.0, DeltaX = 0.0, DeltaY = 0.0;
+		if (!(*Pos)[0].IsValid() || !(*Pos)[0]->TryGetNumber(PositionX)
+			|| !(*Pos)[1].IsValid() || !(*Pos)[1]->TryGetNumber(PositionY)
+			|| !(*Delta)[0].IsValid() || !(*Delta)[0]->TryGetNumber(DeltaX)
+			|| !(*Delta)[1].IsValid() || !(*Delta)[1]->TryGetNumber(DeltaY)
+			|| !FMath::IsFinite(PositionX) || !FMath::IsFinite(PositionY)
+			|| !FMath::IsFinite(DeltaX) || !FMath::IsFinite(DeltaY))
+		{
+			OutError = TEXT("pointer input event contains invalid coordinates");
+			return false;
+		}
+		Out.Position = FVector2D(PositionX, PositionY);
+		Out.Delta = FVector2D(DeltaX, DeltaY);
+		for (const TSharedPtr<FJsonValue>& Button : *Buttons)
+		{
+			FString Name;
+			if (!Button.IsValid() || !Button->TryGetString(Name) || Name.IsEmpty())
+			{
+				OutError = TEXT("pointer input event contains an invalid button name");
+				return false;
+			}
+			Out.PressedButtons.Add(Name);
+		}
+		if (O->HasField(TEXT("key")) && !O->TryGetStringField(TEXT("key"), Out.Key))
+		{
+			OutError = TEXT("pointer input event contains an invalid key name");
+			return false;
+		}
+		if ((Out.Type == EPIEInputEventType::MouseButtonDown || Out.Type == EPIEInputEventType::MouseButtonUp
+			|| Out.Type == EPIEInputEventType::MouseDoubleClick) && Out.Key.IsEmpty())
+		{
+			OutError = TEXT("mouse button event is missing its button name");
+			return false;
+		}
+		double WheelDelta = 0.0;
+		if (O->HasField(TEXT("wheel_delta")))
+		{
+			if (!O->TryGetNumberField(TEXT("wheel_delta"), WheelDelta) || !FMath::IsFinite(WheelDelta))
+			{
+				OutError = TEXT("pointer input event has an invalid wheel delta");
+				return false;
+			}
+			Out.WheelDelta = static_cast<float>(WheelDelta);
+		}
+		else if (Out.Type == EPIEInputEventType::MouseWheel)
+		{
+			OutError = TEXT("mouse wheel event is missing its delta");
+			return false;
+		}
+		return true;
 	}
 
 	// ── Manifest ─────────────────────────────────────────────────────────
@@ -226,13 +390,13 @@ namespace UE_PIE_Automation
 		int32 V = 0;
 		if (!Obj->TryGetNumberField(TEXT("version"), V))
 		{
-			OutError = TEXT("manifest: missing 'version'");
+			OutError = TEXT("manifest: missing 'version'; create a new recording");
 			return false;
 		}
 		Out.Version = V;
-		if (Out.Version > kFormatVersion || Out.Version < 1)
+		if (Out.Version != kFormatVersion)
 		{
-			OutError = FString::Printf(TEXT("manifest: unsupported version %d (expected %d)"), Out.Version, kFormatVersion);
+			OutError = FString::Printf(TEXT("manifest: unsupported version %d (expected %d); create a new recording"), Out.Version, kFormatVersion);
 			return false;
 		}
 		if (!Obj->TryGetStringField(TEXT("id"), Out.Id))
@@ -350,6 +514,18 @@ namespace UE_PIE_Automation
 		O->SetNumberField(TEXT("settle_ms"), S.SettleMs);
 		O->SetNumberField(TEXT("sample_hz"), S.SampleHz);
 		O->SetNumberField(TEXT("rng_seed"), static_cast<double>(S.RngSeed));
+		O->SetStringField(TEXT("input_source"), TEXT("slate"));
+		TArray<TSharedPtr<FJsonValue>> ViewportSize;
+		ViewportSize.Add(MakeShared<FJsonValueNumber>(S.ViewportSize.X));
+		ViewportSize.Add(MakeShared<FJsonValueNumber>(S.ViewportSize.Y));
+		O->SetArrayField(TEXT("viewport_size"), ViewportSize);
+		TArray<TSharedPtr<FJsonValue>> InputEvents;
+		InputEvents.Reserve(S.InputEvents.Num());
+		for (const FPIEInputEvent& Event : S.InputEvents)
+		{
+			InputEvents.Add(MakeShared<FJsonValueObject>(InputEventToJson(Event)));
+		}
+		O->SetArrayField(TEXT("input_events"), InputEvents);
 
 		TArray<TSharedPtr<FJsonValue>> StepsArr;
 		for (const FStep& Step : S.Steps)
@@ -359,19 +535,6 @@ namespace UE_PIE_Automation
 			SO->SetNumberField(TEXT("delay_ms"), Step.DelayMs);
 			switch (Step.Type)
 			{
-			case EStepType::Input:
-				SO->SetStringField(TEXT("action"), Step.Action);
-				SO->SetNumberField(TEXT("value_x"), Step.ValueX);
-				SO->SetNumberField(TEXT("value_y"), Step.ValueY);
-				SO->SetNumberField(TEXT("value_z"), Step.ValueZ);
-				break;
-			case EStepType::Hold:
-				SO->SetStringField(TEXT("action"), Step.Action);
-				SO->SetNumberField(TEXT("value_x"), Step.ValueX);
-				SO->SetNumberField(TEXT("value_y"), Step.ValueY);
-				SO->SetNumberField(TEXT("value_z"), Step.ValueZ);
-				SO->SetNumberField(TEXT("duration_ms"), Step.DurationMs);
-				break;
 			case EStepType::Capture:
 				SO->SetStringField(TEXT("name"), Step.CaptureName);
 				break;
@@ -381,49 +544,6 @@ namespace UE_PIE_Automation
 			case EStepType::Mark:
 				SO->SetStringField(TEXT("label"), Step.Label);
 				break;
-			case EStepType::InputTape:
-			{
-				SO->SetStringField(TEXT("action"), Step.Action);
-				TArray<TSharedPtr<FJsonValue>> ValsArr;
-				ValsArr.Reserve(Step.TapeValues.Num());
-				for (const FVector& V : Step.TapeValues)
-				{
-					// Determine arity from non-zero components; encoder writes
-					// scalar/2-tuple/3-tuple matching the action value type. To
-					// keep the schema self-describing we serialize as an array
-					// always: 1-element for Axis1D, 2 for Axis2D, 3 for Axis3D.
-					// We do not know value type here, so caller is expected to
-					// set TapeValues with the canonical arity already encoded;
-					// the renderer below emits all 3 components and the parser
-					// drops the unused axes by value type. To keep payload
-					// small while remaining lossless, emit 2-tuples when Z is
-					// exactly zero and Y is non-zero, scalar when only X is
-					// non-zero. Otherwise 3-tuple.
-					const bool bZIsZero = V.Z == 0.0;
-					const bool bYIsZero = V.Y == 0.0;
-					if (bZIsZero && bYIsZero)
-					{
-						ValsArr.Add(MakeShared<FJsonValueNumber>(QuantizeAxis(static_cast<float>(V.X))));
-					}
-					else if (bZIsZero)
-					{
-						TArray<TSharedPtr<FJsonValue>> Pair;
-						Pair.Add(MakeShared<FJsonValueNumber>(QuantizeAxis(static_cast<float>(V.X))));
-						Pair.Add(MakeShared<FJsonValueNumber>(QuantizeAxis(static_cast<float>(V.Y))));
-						ValsArr.Add(MakeShared<FJsonValueArray>(Pair));
-					}
-					else
-					{
-						TArray<TSharedPtr<FJsonValue>> Trip;
-						Trip.Add(MakeShared<FJsonValueNumber>(QuantizeAxis(static_cast<float>(V.X))));
-						Trip.Add(MakeShared<FJsonValueNumber>(QuantizeAxis(static_cast<float>(V.Y))));
-						Trip.Add(MakeShared<FJsonValueNumber>(QuantizeAxis(static_cast<float>(V.Z))));
-						ValsArr.Add(MakeShared<FJsonValueArray>(Trip));
-					}
-				}
-				SO->SetArrayField(TEXT("values"), ValsArr);
-				break;
-			}
 			}
 			StepsArr.Add(MakeShared<FJsonValueObject>(SO));
 		}
@@ -437,13 +557,13 @@ namespace UE_PIE_Automation
 		int32 V = 0;
 		if (!Obj->TryGetNumberField(TEXT("version"), V))
 		{
-			OutError = TEXT("sequence: missing 'version'");
+			OutError = TEXT("sequence: missing 'version'; create a new recording");
 			return false;
 		}
 		Out.Version = V;
-		if (Out.Version > kFormatVersion || Out.Version < 1)
+		if (Out.Version != kFormatVersion)
 		{
-			OutError = FString::Printf(TEXT("sequence: unsupported version %d (expected %d)"), Out.Version, kFormatVersion);
+			OutError = FString::Printf(TEXT("sequence: unsupported version %d (expected %d); create a new recording"), Out.Version, kFormatVersion);
 			return false;
 		}
 		Obj->TryGetStringField(TEXT("source_recording_id"), Out.SourceRecordingId);
@@ -456,6 +576,42 @@ namespace UE_PIE_Automation
 		double Seed = 0.0;
 		Obj->TryGetNumberField(TEXT("rng_seed"), Seed);
 		Out.RngSeed = static_cast<int64>(Seed);
+		FString InputSource;
+		const TArray<TSharedPtr<FJsonValue>>* ViewportSize = nullptr;
+		const TArray<TSharedPtr<FJsonValue>>* InputEvents = nullptr;
+		if (!Obj->TryGetStringField(TEXT("input_source"), InputSource) || InputSource != TEXT("slate")
+			|| !Obj->TryGetArrayField(TEXT("viewport_size"), ViewportSize) || !ViewportSize || ViewportSize->Num() != 2
+			|| !Obj->TryGetArrayField(TEXT("input_events"), InputEvents) || !InputEvents)
+		{
+			OutError = TEXT("sequence: missing raw Slate input data; create a new recording");
+			return false;
+		}
+		double ViewportWidth = 0.0, ViewportHeight = 0.0;
+		if (!(*ViewportSize)[0].IsValid() || !(*ViewportSize)[0]->TryGetNumber(ViewportWidth)
+			|| !(*ViewportSize)[1].IsValid() || !(*ViewportSize)[1]->TryGetNumber(ViewportHeight)
+			|| !FMath::IsFinite(ViewportWidth) || !FMath::IsFinite(ViewportHeight)
+			|| ViewportWidth <= 0.0 || ViewportHeight <= 0.0)
+		{
+			OutError = TEXT("sequence: invalid viewport_size; create a new recording");
+			return false;
+		}
+		Out.ViewportSize = FVector2D(ViewportWidth, ViewportHeight);
+		double PreviousTime = -1.0;
+		int32 PreviousOrder = -1;
+		for (const TSharedPtr<FJsonValue>& Value : *InputEvents)
+		{
+			FPIEInputEvent Event;
+			if (!ReadInputEvent(Value, Event, OutError)) return false;
+			if (Event.TimeSeconds < PreviousTime || (Event.TimeSeconds == PreviousTime && Event.Order <= PreviousOrder))
+			{
+				OutError = TEXT("sequence: input_events are not in stable time/order sequence");
+				return false;
+			}
+			if (Event.TimeSeconds != PreviousTime) PreviousOrder = -1;
+			PreviousTime = Event.TimeSeconds;
+			PreviousOrder = Event.Order;
+			Out.InputEvents.Add(MoveTemp(Event));
+		}
 
 		const TArray<TSharedPtr<FJsonValue>>* Steps = nullptr;
 		if (!Obj->TryGetArrayField(TEXT("steps"), Steps) || !Steps)
@@ -466,48 +622,29 @@ namespace UE_PIE_Automation
 		for (const TSharedPtr<FJsonValue>& V2 : *Steps)
 		{
 			const TSharedPtr<FJsonObject>& SO = V2->AsObject();
-			if (!SO.IsValid()) continue;
+			if (!SO.IsValid())
+			{
+				OutError = TEXT("sequence: invalid step entry");
+				return false;
+			}
 			FString TypeStr;
-			if (!SO->TryGetStringField(TEXT("type"), TypeStr)) continue;
+			if (!SO->TryGetStringField(TEXT("type"), TypeStr))
+			{
+				OutError = TEXT("sequence: step is missing 'type'");
+				return false;
+			}
 			FStep Step;
-			if (!ParseStepType(TypeStr, Step.Type)) continue;
+			if (!ParseStepType(TypeStr, Step.Type))
+			{
+				OutError = FString::Printf(TEXT("sequence: unsupported step type '%s'; create a new recording"), *TypeStr);
+				return false;
+			}
 			int32 Delay = 0;
 			SO->TryGetNumberField(TEXT("delay_ms"), Delay);
 			Step.DelayMs = Delay;
-			SO->TryGetStringField(TEXT("action"), Step.Action);
-			SO->TryGetNumberField(TEXT("value_x"), Step.ValueX);
-			SO->TryGetNumberField(TEXT("value_y"), Step.ValueY);
-			SO->TryGetNumberField(TEXT("value_z"), Step.ValueZ);
-			int32 Dur = 0;
-			SO->TryGetNumberField(TEXT("duration_ms"), Dur);
-			Step.DurationMs = Dur;
 			SO->TryGetStringField(TEXT("name"), Step.CaptureName);
 			SO->TryGetStringField(TEXT("command"), Step.Command);
 			SO->TryGetStringField(TEXT("label"), Step.Label);
-
-			if (Step.Type == EStepType::InputTape)
-			{
-				const TArray<TSharedPtr<FJsonValue>>* Vals = nullptr;
-				if (SO->TryGetArrayField(TEXT("values"), Vals) && Vals)
-				{
-					for (const TSharedPtr<FJsonValue>& VV : *Vals)
-					{
-						FVector Vec(0, 0, 0);
-						if (VV->Type == EJson::Array)
-						{
-							const TArray<TSharedPtr<FJsonValue>>& Arr = VV->AsArray();
-							if (Arr.Num() >= 1) Vec.X = Arr[0]->AsNumber();
-							if (Arr.Num() >= 2) Vec.Y = Arr[1]->AsNumber();
-							if (Arr.Num() >= 3) Vec.Z = Arr[2]->AsNumber();
-						}
-						else
-						{
-							Vec.X = VV->AsNumber();
-						}
-						Step.TapeValues.Add(Vec);
-					}
-				}
-			}
 
 			Out.Steps.Add(Step);
 		}

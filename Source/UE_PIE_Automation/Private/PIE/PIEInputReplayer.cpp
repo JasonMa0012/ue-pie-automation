@@ -2,7 +2,7 @@
 #include "PIEViewportCapture.h"
 #include "PIEContactSheet.h"
 #include "PIESessionLog.h"
-#include "PIEInputInjector.h"
+#include "PIEInputRecorder.h"
 #include "UE_PIE_AutomationModule.h"
 #include "Editor.h"
 #include "Engine/Engine.h"
@@ -20,7 +20,6 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Math/UnrealMathUtility.h"
-#include "InputAction.h"
 #include "UnrealClient.h"
 #include "UObject/UObjectGlobals.h"
 #include "GameFramework/Pawn.h"
@@ -35,31 +34,6 @@ namespace UE_PIE_Automation
 {
 	namespace
 	{
-		UInputAction* LoadAction(const FString& Path)
-		{
-			if (Path.IsEmpty()) return nullptr;
-			UInputAction* A = LoadObject<UInputAction>(nullptr, *Path);
-			if (!A && !Path.Contains(TEXT(".")))
-			{
-				FString Name;
-				Path.Split(TEXT("/"), nullptr, &Name, ESearchCase::CaseSensitive, ESearchDir::FromEnd);
-				A = LoadObject<UInputAction>(nullptr, *(Path + TEXT(".") + Name));
-			}
-			return A;
-		}
-
-		FInputActionValue VectorToActionValue(EInputActionValueType Type, const FVector& V)
-		{
-			switch (Type)
-			{
-			case EInputActionValueType::Boolean: return FInputActionValue(V.X != 0.0);
-			case EInputActionValueType::Axis1D:  return FInputActionValue(static_cast<float>(V.X));
-			case EInputActionValueType::Axis2D:  return FInputActionValue(FVector2D(V.X, V.Y));
-			case EInputActionValueType::Axis3D:  return FInputActionValue(V);
-			}
-			return FInputActionValue();
-		}
-
 		// Strip anything that could escape the captures/ directory or break
 		// the printf-built filename. Restricts to [A-Za-z0-9._-]; empty input
 		// (or input that sanitizes to empty) becomes "capture".
@@ -106,7 +80,7 @@ namespace UE_PIE_Automation
 
 	void FPIEInputReplayer::Shutdown()
 	{
-		UnbindWorldPreActorTick();
+		FPIEInputRouter::Get().EndReplay();
 		if (BeginPIEHandle.IsValid()) FEditorDelegates::BeginPIE.Remove(BeginPIEHandle);
 		if (EndPIEHandle.IsValid())   FEditorDelegates::EndPIE.Remove(EndPIEHandle);
 		BeginPIEHandle.Reset();
@@ -119,72 +93,7 @@ namespace UE_PIE_Automation
 		bEndFrameBound = false;
 		State = EReplayerState::Idle;
 		bArmed = false;
-		ActiveHolds.Reset();
 		DriftFrames.Reset();
-	}
-
-	void FPIEInputReplayer::BindWorldPreActorTick(UWorld* PIEWorld)
-	{
-		UnbindWorldPreActorTick();
-		MouseWorld = PIEWorld;
-		if (PIEWorld)
-		{
-			WorldPreActorTickHandle = FWorldDelegates::OnWorldPreActorTick.AddRaw(
-				this, &FPIEInputReplayer::OnWorldPreActorTick);
-		}
-	}
-
-	void FPIEInputReplayer::UnbindWorldPreActorTick()
-	{
-		if (WorldPreActorTickHandle.IsValid())
-		{
-			FWorldDelegates::OnWorldPreActorTick.Remove(WorldPreActorTickHandle);
-			WorldPreActorTickHandle.Reset();
-		}
-		MouseWorld.Reset();
-		bHasScheduledMouseFrame = false;
-		bLogNextMousePreInput = false;
-		DebugMouseStepIndex = INDEX_NONE;
-	}
-
-	void FPIEInputReplayer::OnWorldPreActorTick(UWorld* World, ELevelTick /*TickType*/, float /*DeltaSeconds*/)
-	{
-		if (State != EReplayerState::Replaying || World != MouseWorld.Get()) return;
-		if (!bHasScheduledMouseFrame) return;
-
-		const uint64 Frame = ScheduledMouseFrame;
-		bHasScheduledMouseFrame = false;
-		if (SourceFrames.IsValidIndex(static_cast<int32>(Frame)))
-		{
-			// Input holds are injected from the previous end-of-frame callback and
-			// are consumed by PlayerController::TickPlayerInput after this delegate.
-			// Set the matching source cursor here, not at frame end, so a click
-			// cannot observe the cursor reposition performed by the previous click.
-			ApplyMousePosition(World, SourceFrames[static_cast<int32>(Frame)]);
-
-			if (bLogNextMousePreInput)
-			{
-				APlayerController* PC = (Pending.ClientId > 0)
-					? UGameplayStatics::GetPlayerController(World, Pending.ClientId)
-					: World->GetFirstPlayerController();
-				float MouseX = 0.f;
-				float MouseY = 0.f;
-				const bool bActualValid = PC && PC->GetMousePosition(MouseX, MouseY);
-				const FSourceFrame& Source = SourceFrames[static_cast<int32>(Frame)];
-				UE_LOG(LogUE_PIE_Automation, Display,
-					TEXT("[PIE-INPUT-DEBUG] replay_pre_input step=%d source_frame=%llu requested_valid=%d requested=(%.0f,%.0f) actual_valid=%d actual=(%.0f,%.0f)"),
-					DebugMouseStepIndex,
-					Frame,
-					Source.bMousePositionValid ? 1 : 0,
-					Source.MousePosition.X,
-					Source.MousePosition.Y,
-					bActualValid ? 1 : 0,
-					MouseX,
-					MouseY);
-				bLogNextMousePreInput = false;
-				DebugMouseStepIndex = INDEX_NONE;
-			}
-		}
 	}
 
 	bool FPIEInputReplayer::LoadSourceFrames(const FString& CSVPath, FString& OutError)
@@ -229,15 +138,6 @@ namespace UE_PIE_Automation
 		const int32 ColVz    = FindCol(TEXT("vel_z"));
 		const int32 ColS2    = FindCol(TEXT("speed2d"));
 		const int32 ColMo    = FindCol(TEXT("montage"));
-		const int32 ColMx    = FindCol(TEXT("mouse_x"));
-		const int32 ColMy    = FindCol(TEXT("mouse_y"));
-		const int32 ColMv    = FindCol(TEXT("mouse_valid"));
-		bSourceHasMousePosition = ColMx >= 0 && ColMy >= 0;
-		if (!bSourceHasMousePosition)
-		{
-			UE_LOG(LogUE_PIE_Automation, Verbose, TEXT("[PIE-REP] Source recording has no mouse position columns; mouse restoration disabled"));
-		}
-
 		// Tracked reflection paths live in columns prefixed with "t:". Map
 		// each column index to the path so per-frame deltas can be computed.
 		TArray<TPair<int32, FString>> TrackedCols;
@@ -271,11 +171,6 @@ namespace UE_PIE_Automation
 			F.PawnVelocity = FVector(ReadCol(Cols, ColVx), ReadCol(Cols, ColVy), ReadCol(Cols, ColVz));
 			F.Speed2D = static_cast<float>(ReadCol(Cols, ColS2));
 			if (ColMo >= 0 && ColMo < Cols.Num()) F.MontageSection = Cols[ColMo];
-			if (bSourceHasMousePosition)
-			{
-				F.MousePosition = FVector2D(ReadCol(Cols, ColMx), ReadCol(Cols, ColMy));
-				F.bMousePositionValid = ColMv < 0 || ReadCol(Cols, ColMv) > 0.5;
-			}
 			for (const TPair<int32, FString>& TC : TrackedCols)
 			{
 				F.TrackedValues.Add(TC.Value, ReadCol(Cols, TC.Key));
@@ -296,19 +191,6 @@ namespace UE_PIE_Automation
 			++SourceFrameCursor;
 		}
 		return SourceFrameCursor;
-	}
-
-	void FPIEInputReplayer::ApplyMousePosition(UWorld* PIEWorld, const FSourceFrame& Frame)
-	{
-		if (!PIEWorld || !Frame.bMousePositionValid) return;
-		APlayerController* PC = (Pending.ClientId > 0)
-			? UGameplayStatics::GetPlayerController(PIEWorld, Pending.ClientId)
-			: PIEWorld->GetFirstPlayerController();
-		if (!PC) return;
-
-		PC->SetMouseLocation(
-			FMath::RoundToInt(Frame.MousePosition.X),
-			FMath::RoundToInt(Frame.MousePosition.Y));
 	}
 
 	void FPIEInputReplayer::TeleportPawnToStart(APawn* Pawn)
@@ -397,7 +279,6 @@ namespace UE_PIE_Automation
 		FramesMissingInReplay = 0;
 		MaxTrackedDeltas.Reset();
 		SourceTrackedPaths.Reset();
-		bSourceHasMousePosition = false;
 		SourceActorRows.Reset();
 		SourceActorIds.Reset();
 		ReplayActorCache.Reset();
@@ -410,11 +291,10 @@ namespace UE_PIE_Automation
 		CaptureDir.Reset();
 		NextStepIndex = 0;
 		ExecutedSteps = 0;
-		ActiveHolds.Reset();
 		bEndPIERequested = false;
 		CaptureDrainTicks = 0;
-		UnbindWorldPreActorTick();
-		ScheduledMouseFrame = 0;
+		InputEventsExecuted = 0;
+		InputError.Reset();
 
 		FString Err;
 		if (Cfg.bInlineSequenceProvided)
@@ -555,7 +435,6 @@ namespace UE_PIE_Automation
 		Sampler.SetConfig(SC);
 
 		State = EReplayerState::WaitingForPawn;
-		UnbindWorldPreActorTick();
 		AttachTime = 0.0;
 		StartedAt = ISOTimestampNow();
 
@@ -588,60 +467,6 @@ namespace UE_PIE_Automation
 
 			switch (S.Type)
 			{
-			case EStepType::Input:
-			{
-				UInputAction* Act = LoadAction(S.Action);
-				if (Act)
-				{
-					FString Err;
-					FPIEInputInjector::InjectOnce(Act, VectorToActionValue(Act->ValueType, FVector(S.ValueX, S.ValueY, S.ValueZ)), Err, Pending.ClientId);
-				}
-				break;
-			}
-			case EStepType::Hold:
-			{
-				if (S.Action.Contains(TEXT("MouseLeftClick")))
-				{
-					const FSourceFrame* Source = SourceFrames.IsValidIndex(static_cast<int32>(ScheduledMouseFrame))
-						? &SourceFrames[static_cast<int32>(ScheduledMouseFrame)]
-						: nullptr;
-					UE_LOG(LogUE_PIE_Automation, Display,
-						TEXT("[PIE-INPUT-DEBUG] schedule_click step=%d source_frame=%llu delay_ms=%d source_valid=%d source=(%.0f,%.0f)"),
-						NextStepIndex,
-						ScheduledMouseFrame,
-						S.DelayMs,
-						Source && Source->bMousePositionValid ? 1 : 0,
-						Source ? Source->MousePosition.X : 0.f,
-						Source ? Source->MousePosition.Y : 0.f);
-					bLogNextMousePreInput = true;
-					DebugMouseStepIndex = NextStepIndex;
-				}
-				UInputAction* Act = LoadAction(S.Action);
-				if (Act)
-				{
-					FString Err;
-					const FString Id = FPIEInputInjector::StartHold(Act, VectorToActionValue(Act->ValueType, FVector(S.ValueX, S.ValueY, S.ValueZ)), FString(), Err, Pending.ClientId);
-					if (!Id.IsEmpty())
-					{
-						FHoldHandle H;
-						H.StepIndex = NextStepIndex;
-						H.StopAtMs = ElapsedMs + S.DurationMs;
-						H.InjectionId = Id;
-						ActiveHolds.Add(H);
-					}
-				}
-				break;
-			}
-			case EStepType::InputTape:
-			{
-				UInputAction* Act = LoadAction(S.Action);
-				if (Act)
-				{
-					FString Err;
-					FPIEInputInjector::StartTape(Act, S.TapeValues, ActiveSequence.SampleHz, FString(), Err, Pending.ClientId);
-				}
-				break;
-			}
 			case EStepType::Mark:
 				Sampler.QueueMarker(S.Label);
 				break;
@@ -689,15 +514,6 @@ namespace UE_PIE_Automation
 			ExecutedSteps++;
 		}
 
-		// Stop holds whose duration has elapsed.
-		for (int32 i = ActiveHolds.Num() - 1; i >= 0; --i)
-		{
-			if (ElapsedMs >= ActiveHolds[i].StopAtMs)
-			{
-				FPIEInputInjector::StopAny(ActiveHolds[i].InjectionId);
-				ActiveHolds.RemoveAt(i);
-			}
-		}
 	}
 
 	void FPIEInputReplayer::OnEndFrame()
@@ -746,9 +562,6 @@ namespace UE_PIE_Automation
 
 		if (State == EReplayerState::WaitingForPawn)
 		{
-			// Bind before the sampler so the replay cursor is set first and the
-			// sampler captures that same pre-input position in its CSV/drift row.
-			BindWorldPreActorTick(PIEWorld);
 			if (Sampler.AttachToPIE(PIEWorld))
 			{
 				if (Pending.bApplyRngSeed)
@@ -789,15 +602,13 @@ namespace UE_PIE_Automation
 					}
 				}
 
+				if (!Pending.bMonitor && !FPIEInputRouter::Get().BeginReplay(ActiveSequence, InputError))
+				{
+					UE_LOG(LogUE_PIE_Automation, Error, TEXT("[PIE-REP] Raw input replay failed: %s"), *InputError);
+				}
 				AttachTime = PIEWorld->GetTimeSeconds();
 				State = EReplayerState::Replaying;
 				SourceFrameCursor = 0;
-				ScheduledMouseFrame = 0;
-				bHasScheduledMouseFrame = SourceFrames.Num() > 0;
-			}
-			else
-			{
-				UnbindWorldPreActorTick();
 			}
 			return;
 		}
@@ -805,15 +616,11 @@ namespace UE_PIE_Automation
 		if (State == EReplayerState::Replaying)
 		{
 			const double Now = PIEWorld->GetTimeSeconds();
-			// Keep every source-backed stream on the same clock. During settle the
-			// cursor stays at frame 0; after settle, mouse frames, input steps,
-			// drift, and captures all begin at source frame 0 together.
+			// Input events, auxiliary steps, drift and captures share this replay clock.
 			const int32 Settle = (Pending.SettleMs >= 0) ? Pending.SettleMs : ActiveSequence.SettleMs;
 			const double ElapsedMs = (Now - AttachTime) * 1000.0;
 			if (ElapsedMs < Settle)
 			{
-				ScheduledMouseFrame = 0;
-				bHasScheduledMouseFrame = SourceFrames.Num() > 0;
 				return;
 			}
 
@@ -824,18 +631,19 @@ namespace UE_PIE_Automation
 			const bool bSourceTimelineDone = SourceFrames.Num() == 0
 				|| TimelineElapsedMs + 0.001 >= SourceTimelineDurationMs;
 			const uint64 ReplayFrame = ReplayFrameCounter++;
-			const int32 SourceFrameIndex = FindSourceFrameForTimeline(TimelineElapsedMs);
-			if (SourceFrameIndex != INDEX_NONE)
-			{
-				// This frame's input is injected below and consumed on the next world
-				// tick. Select the source row by its recorded timestamp rather than
-				// assuming every recording row was exactly 1 / SampleHz apart.
-				ScheduledMouseFrame = static_cast<uint64>(SourceFrameIndex);
-				bHasScheduledMouseFrame = true;
-			}
-
+			FindSourceFrameForTimeline(TimelineElapsedMs);
 			if (!Pending.bMonitor)
 			{
+				if (InputError.IsEmpty())
+				{
+					FString DispatchError;
+					if (!FPIEInputRouter::Get().DispatchDue(TimelineElapsedMs, DispatchError))
+					{
+						InputError = DispatchError;
+						UE_LOG(LogUE_PIE_Automation, Error, TEXT("[PIE-REP] Raw input dispatch failed: %s"), *InputError);
+					}
+				}
+				InputEventsExecuted = FPIEInputRouter::Get().GetExecutedEventCount();
 				ExecutePendingSteps(TimelineElapsedMs);
 			}
 
@@ -1052,12 +860,19 @@ namespace UE_PIE_Automation
 			// reached the last recorded source timestamp. ReplayFrameCounter is
 			// an execution counter, not a time axis, so it cannot define the end
 			// when source rows have irregular timestamps.
-			const bool bStepsDone = Pending.bMonitor ? true : (NextStepIndex >= ActiveSequence.Steps.Num() && ActiveHolds.Num() == 0);
-			if (bStepsDone)
+			const bool bStepsDone = Pending.bMonitor || NextStepIndex >= ActiveSequence.Steps.Num();
+			const bool bInputEventsDone = Pending.bMonitor || !InputError.IsEmpty()
+				|| InputEventsExecuted >= ActiveSequence.InputEvents.Num();
+			if (bStepsDone && bInputEventsDone)
 			{
 				if (bSourceTimelineDone)
 				{
 					State = EReplayerState::Completed;
+					if (!Pending.bMonitor)
+					{
+						InputEventsExecuted = FPIEInputRouter::Get().EndReplay();
+						if (InputError.IsEmpty()) InputError = FPIEInputRouter::Get().GetLastError();
+					}
 				}
 			}
 		}
@@ -1078,17 +893,21 @@ namespace UE_PIE_Automation
 			return R;
 		}
 
-		UnbindWorldPreActorTick();
-
-		// Stop any holds that the sequence did not finish.
-		for (const FHoldHandle& H : ActiveHolds)
+		if (!Pending.bMonitor)
 		{
-			FPIEInputInjector::StopAny(H.InjectionId);
+			InputEventsExecuted = FPIEInputRouter::Get().EndReplay();
+			if (InputError.IsEmpty()) InputError = FPIEInputRouter::Get().GetLastError();
 		}
-		ActiveHolds.Reset();
 
 		R.bSuccess = true;
 		R.ExecutedSteps = ExecutedSteps;
+		R.InputEventsExecuted = InputEventsExecuted;
+		R.InputError = InputError;
+		if (!InputError.IsEmpty())
+		{
+			R.bSuccess = false;
+			R.Error = InputError;
+		}
 		R.FramesCaptured = FramesCaptured;
 		R.CaptureDir = CaptureDir;
 
@@ -1247,10 +1066,14 @@ namespace UE_PIE_Automation
 		S.MaxPositionDriftCm = MaxPosDriftCm;
 		S.MaxVelocityDriftCms = MaxVelDriftCms;
 		S.FramesCaptured = FramesCaptured;
+		S.InputEventsExecuted = InputEventsExecuted;
+		S.InputError = InputError;
 		S.bPIEActive = (GEditor && GEditor->PlayWorld != nullptr);
 		if (bHasLastFinish)
 		{
 			S.bHasLastResult = true;
+			S.LastInputEventsExecuted = LastFinish.InputEventsExecuted;
+			S.LastInputError = LastFinish.InputError;
 			S.LastDriftReportPath = LastFinish.DriftReportPath;
 			S.LastMaxPositionDriftCm = LastFinish.Drift.MaxPositionDriftCm;
 			S.LastMaxVelocityDriftCms = LastFinish.Drift.MaxVelocityDriftCms;

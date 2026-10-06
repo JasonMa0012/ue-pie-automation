@@ -79,6 +79,10 @@ namespace UE_PIE_Automation
 		float MaxPositionDriftCm = 0.f;
 		float MaxVelocityDriftCms = 0.f;
 		int32 FramesCaptured = 0;
+		int32 InputEventsExecuted = 0;
+		FString InputError;
+		int32 LastInputEventsExecuted = 0;
+		FString LastInputError;
 		// True while a PIE session is live. Lets an unattended caller that
 		// kicked off replay_run poll until PIE has torn itself down.
 		bool bPIEActive = false;
@@ -117,6 +121,8 @@ namespace UE_PIE_Automation
 		FString DriftReportPath;
 		FDriftReport Drift;
 		int32 ExecutedSteps = 0;
+		int32 InputEventsExecuted = 0;
+		FString InputError;
 		int32 FramesCaptured = 0;
 		FString CaptureDir;
 		// Kept frames + the labeled contact sheet (item 1b). FrameDir holds the
@@ -147,8 +153,6 @@ namespace UE_PIE_Automation
 		void OnEndPIE(bool bIsSimulating);
 		void OnEndFrame();
 		void OnWorldPreActorTick(UWorld* World, ELevelTick TickType, float DeltaSeconds);
-		void BindWorldPreActorTick(UWorld* PIEWorld);
-		void UnbindWorldPreActorTick();
 		FReplayerFinishResult FinaliseCurrent();
 		void ExecutePendingSteps(double ElapsedMs);
 		void ApplyFPSPin(UWorld* PIEWorld, int32 Hz);
@@ -164,15 +168,11 @@ namespace UE_PIE_Automation
 			FVector PawnVelocity = FVector::ZeroVector;
 			float Speed2D = 0.f;
 			FString MontageSection;
-			FVector2D MousePosition = FVector2D::ZeroVector;
-			bool bMousePositionValid = false;
 			TMap<FString, double> TrackedValues;
 		};
 		bool LoadSourceFrames(const FString& CSVPath, FString& OutError);
 		int32 FindSourceFrameForTimeline(double TimelineElapsedMs);
-		void ApplyMousePosition(UWorld* PIEWorld, const FSourceFrame& Frame);
 		TArray<FString> SourceTrackedPaths;
-		bool bSourceHasMousePosition = false;
 
 		FReplayerArmConfig Pending;
 		FSequence ActiveSequence;
@@ -200,11 +200,9 @@ namespace UE_PIE_Automation
 		double AttachTime = 0.0;
 		int32 NextStepIndex = 0;
 		int32 ExecutedSteps = 0;
+		int32 InputEventsExecuted = 0;
 		FString StartedAt;
-
-		// Active hold lifecycles: maps "step <i> stop time ms" -> injection id.
-		struct FHoldHandle { int32 StepIndex; double StopAtMs; FString InjectionId; };
-		TArray<FHoldHandle> ActiveHolds;
+		FString InputError;
 
 		// Drift accumulators
 		TArray<FDriftFrameEntry> DriftFrames;
@@ -244,11 +242,6 @@ namespace UE_PIE_Automation
 		FDelegateHandle EndPIEHandle;
 		FDelegateHandle OnEndFrameHandle;
 		FDelegateHandle WorldPreActorTickHandle;
-		TWeakObjectPtr<UWorld> MouseWorld;
-		uint64 ScheduledMouseFrame = 0;
-		bool bHasScheduledMouseFrame = false;
-		bool bLogNextMousePreInput = false;
-		int32 DebugMouseStepIndex = INDEX_NONE;
 		bool bEndFrameBound = false;
 
 		// Fixed-timestep save/restore (item X2).

@@ -95,6 +95,8 @@ namespace
 		R->SetNumberField(TEXT("max_position_drift_cm"), S.MaxPositionDriftCm);
 		R->SetNumberField(TEXT("max_velocity_drift_cms"), S.MaxVelocityDriftCms);
 		R->SetNumberField(TEXT("frames_captured"), S.FramesCaptured);
+		R->SetNumberField(TEXT("input_events_executed"), S.InputEventsExecuted);
+		if (!S.InputError.IsEmpty()) R->SetStringField(TEXT("input_error"), S.InputError);
 		// pie_active lets an unattended replay_run caller poll until the PIE
 		// session has ended; when it flips false and last_result is present the
 		// drift report on disk is finalized and safe to read.
@@ -106,6 +108,8 @@ namespace
 			Last->SetNumberField(TEXT("max_position_drift_cm"), S.LastMaxPositionDriftCm);
 			Last->SetNumberField(TEXT("max_velocity_drift_cms"), S.LastMaxVelocityDriftCms);
 			Last->SetNumberField(TEXT("frames_compared"), S.LastFramesCompared);
+			Last->SetNumberField(TEXT("input_events_executed"), S.LastInputEventsExecuted);
+			if (!S.LastInputError.IsEmpty()) Last->SetStringField(TEXT("input_error"), S.LastInputError);
 			// Item 1b: kept frames + labeled contact sheet the agent can view.
 			if (!S.LastFrameDir.IsEmpty()) Last->SetStringField(TEXT("frame_dir"), S.LastFrameDir);
 			if (S.LastFrameCount > 0) Last->SetNumberField(TEXT("frame_count"), S.LastFrameCount);
@@ -145,6 +149,13 @@ namespace
 			Env->SetNumberField(TEXT("settle_ms"), OptionalInt(Params, TEXT("settle_ms"), 500));
 			Env->SetNumberField(TEXT("sample_hz"), OptionalInt(Params, TEXT("sample_hz"), 60));
 			Env->SetNumberField(TEXT("rng_seed"), OptionalNumber(Params, TEXT("rng_seed"), 0.0));
+			Env->SetStringField(TEXT("input_source"), TEXT("slate"));
+			TArray<TSharedPtr<FJsonValue>> ViewportSize;
+			ViewportSize.Add(MakeShared<FJsonValueNumber>(1));
+			ViewportSize.Add(MakeShared<FJsonValueNumber>(1));
+			Env->SetArrayField(TEXT("viewport_size"), ViewportSize);
+			TArray<TSharedPtr<FJsonValue>> NoInputEvents;
+			Env->SetArrayField(TEXT("input_events"), NoInputEvents);
 			Env->SetArrayField(TEXT("steps"), *StepsArr);
 			FSequence S;
 			FString Err;
@@ -307,6 +318,7 @@ TSharedPtr<FJsonValue> FGameplayHandlers::PieReplayStop(const TSharedPtr<FJsonOb
 	auto Result = MCPSuccess();
 	Result->SetBoolField(TEXT("stopped"), true);
 	Result->SetNumberField(TEXT("executed_steps"), F.ExecutedSteps);
+	Result->SetNumberField(TEXT("input_events_executed"), F.InputEventsExecuted);
 	Result->SetNumberField(TEXT("frames_captured"), F.FramesCaptured);
 	if (F.FrameCount > 0)
 	{

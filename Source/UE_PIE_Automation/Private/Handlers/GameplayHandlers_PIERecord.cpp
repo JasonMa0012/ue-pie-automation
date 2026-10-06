@@ -33,6 +33,8 @@ namespace
 		R->SetNumberField(TEXT("current_frame"), S.CurrentFrame);
 		R->SetNumberField(TEXT("elapsed_seconds"), S.ElapsedSeconds);
 		R->SetNumberField(TEXT("tracked_action_count"), S.TrackedActionCount);
+		R->SetNumberField(TEXT("raw_input_event_count"), S.RawInputEventCount);
+		if (!S.InputError.IsEmpty()) R->SetStringField(TEXT("input_error"), S.InputError);
 	}
 
 	void WriteFinishFields(TSharedPtr<FJsonObject> R, const FRecorderFinishResult& F)
@@ -44,6 +46,8 @@ namespace
 		R->SetStringField(TEXT("sequence_path"), F.SequencePath);
 		R->SetNumberField(TEXT("total_frames"), F.TotalFrames);
 		R->SetNumberField(TEXT("duration_seconds"), F.DurationSeconds);
+		R->SetNumberField(TEXT("raw_input_event_count"), F.RawInputEventCount);
+		if (!F.InputError.IsEmpty()) R->SetStringField(TEXT("input_error"), F.InputError);
 		if (F.bTakeRecordAttempted)
 		{
 			R->SetStringField(TEXT("take_recorder_status"), F.TakeRecorderStatus);
@@ -119,9 +123,6 @@ TSharedPtr<FJsonValue> FGameplayHandlers::PieRecordArm(const TSharedPtr<FJsonObj
 			Cfg.bUserSuppliedSeed = true;
 		}
 	}
-
-	int32 GapFrames = 6;
-	if (Params->TryGetNumberField(TEXT("run_gap_frames"), GapFrames)) Cfg.RunGapFrames = GapFrames;
 
 	Cfg.RecordingsRoot = OptionalString(Params, TEXT("recording_dir"));
 	Cfg.Id = OptionalString(Params, TEXT("id"));

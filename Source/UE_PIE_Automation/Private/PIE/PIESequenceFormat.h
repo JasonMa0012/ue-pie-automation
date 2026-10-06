@@ -14,11 +14,11 @@ class AActor;
  *
  * A recording lives in <ProjectSavedDir>/MCPRecordings/<id>/ and contains:
  *   - manifest.json   Top-level metadata, action list, markers, file pointers
- *   - sequence.json   Replay-ready step list (input_tape / hold / mark / capture / console)
+ *   - sequence.json   Slate input events plus auxiliary mark / capture / console steps
  *   - recording.csv   Per-frame samples for analysis (pandas/jq friendly)
  *   - drift.json      Per-frame deltas vs source recording (only after a replay)
  *
- * Schema is versioned at the top of every JSON file. The current version is 1.
+ * Sequence files accept only the current raw Slate input format.
  *
  * This header defines the in-memory structs and pure read/write helpers. There
  * are no UObject lifetimes here; safe to call from any thread that owns its
@@ -26,9 +26,7 @@ class AActor;
  */
 namespace UE_PIE_Automation
 {
-	// v2 (item 4a/1c/2b): added drift summary block, perf CSV columns, and series
-	// reads. All additive; readers accept any version <= kFormatVersion.
-	constexpr int32 kFormatVersion = 2;
+	constexpr int32 kFormatVersion = 3;
 
 	enum class EActionValueType : uint8
 	{
@@ -107,11 +105,8 @@ namespace UE_PIE_Automation
 
 	enum class EStepType : uint8
 	{
-		Input,
-		Hold,
 		Capture,
 		Console,
-		InputTape,
 		Mark
 	};
 
@@ -120,17 +115,43 @@ namespace UE_PIE_Automation
 
 	struct FStep
 	{
-		EStepType Type = EStepType::Input;
-		FString Action;
+		EStepType Type = EStepType::Mark;
 		int32 DelayMs = 0;
-		double ValueX = 0.0;
-		double ValueY = 0.0;
-		double ValueZ = 0.0;
-		int32 DurationMs = 0;
 		FString CaptureName;
 		FString Command;
 		FString Label;
-		TArray<FVector> TapeValues;
+	};
+
+	enum class EPIEInputEventType : uint8
+	{
+		KeyDown,
+		KeyUp,
+		MouseMove,
+		MouseButtonDown,
+		MouseButtonUp,
+		MouseDoubleClick,
+		MouseWheel
+	};
+
+	struct FPIEInputEvent
+	{
+		EPIEInputEventType Type = EPIEInputEventType::MouseMove;
+		double TimeSeconds = 0.0;
+		int32 Order = 0;
+		FString Key;
+		TArray<FString> PressedButtons;
+		FVector2D Position = FVector2D::ZeroVector;
+		FVector2D Delta = FVector2D::ZeroVector;
+		float WheelDelta = 0.0f;
+		uint32 UserIndex = 0;
+		uint32 PointerIndex = 0;
+		uint32 KeyCode = 0;
+		bool bIsRepeat = false;
+		bool bShift = false;
+		bool bControl = false;
+		bool bAlt = false;
+		bool bCommand = false;
+		bool bCapsLocked = false;
 	};
 
 	struct FSequence
@@ -140,6 +161,8 @@ namespace UE_PIE_Automation
 		int32 SettleMs = 500;
 		int32 SampleHz = 60;
 		int64 RngSeed = 0;
+		FVector2D ViewportSize = FVector2D::ZeroVector;
+		TArray<FPIEInputEvent> InputEvents;
 		TArray<FStep> Steps;
 	};
 

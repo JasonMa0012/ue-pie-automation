@@ -1,12 +1,17 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Framework/Application/IInputProcessor.h"
+#include "Input/Events.h"
 #include "PIEFrameSampler.h"
 #include "PIESequenceFormat.h"
 #include "UObject/WeakObjectPtrTemplates.h"
 
 class UWorld;
 class AActor;
+class SViewport;
+class SWindow;
+struct FGeometry;
 
 /**
  * PIE input recorder: opt-in arm-then-record. Module-owned singleton, hooked
@@ -61,7 +66,6 @@ namespace UE_PIE_Automation
 		bool bCaptureMontage = true;
 		int64 RngSeed = 0;                // 0 = auto-generate
 		bool bUserSuppliedSeed = false;
-		int32 RunGapFrames = 6;           // sequence run-extraction gap tolerance
 	};
 
 	struct FRecorderStatus
@@ -72,6 +76,8 @@ namespace UE_PIE_Automation
 		int32 CurrentFrame = 0;
 		double ElapsedSeconds = 0.0;
 		int32 TrackedActionCount = 0;
+		int32 RawInputEventCount = 0;
+		FString InputError;
 	};
 
 	struct FRecorderFinishResult
@@ -89,6 +95,80 @@ namespace UE_PIE_Automation
 		TArray<FMarker> Markers;
 		bool bTakeRecordAttempted = false;
 		FString TakeRecorderStatus;
+		int32 RawInputEventCount = 0;
+		FString InputError;
+	};
+
+	class FPIEInputRouter final : public IInputProcessor, public TSharedFromThis<FPIEInputRouter>
+	{
+	public:
+		static FPIEInputRouter& Get();
+		static const FPIEInputEvent* TakeNextDueEvent(const TArray<FPIEInputEvent>& Events, int32& Cursor, double ElapsedMs);
+		static bool DispatchDueEvents(const TArray<FPIEInputEvent>& Events, int32& Cursor, double ElapsedMs,
+			TFunctionRef<bool(const FPIEInputEvent&, FString&)> DispatchEvent, FString& OutError);
+		static TArray<FPIEInputEvent> BuildHeldInputReleaseEvents(
+			const TMap<FKey, FPIEInputEvent>& KeysDown,
+			const TMap<FKey, FPIEInputEvent>& ButtonsDown);
+		void Shutdown();
+
+		bool BeginRecording(UWorld* World, double BaseTimeSeconds, FString& OutError);
+		void EndRecording(TArray<FPIEInputEvent>& OutEvents, FVector2D& OutViewportSize);
+		bool BeginReplay(const FSequence& Sequence, FString& OutError);
+		bool DispatchDue(double ElapsedMs, FString& OutError);
+		int32 EndReplay();
+
+		int32 GetExecutedEventCount() const { return ExecutedEventCount; }
+		int32 GetRecordedEventCount() const;
+		const FString& GetLastError() const { return LastError; }
+
+		virtual void Tick(float DeltaTime, FSlateApplication& SlateApp, TSharedRef<ICursor> Cursor) override;
+		virtual bool HandleKeyDownEvent(FSlateApplication& SlateApp, const FKeyEvent& Event) override;
+		virtual bool HandleKeyUpEvent(FSlateApplication& SlateApp, const FKeyEvent& Event) override;
+		virtual bool HandleMouseMoveEvent(FSlateApplication& SlateApp, const FPointerEvent& Event) override;
+		virtual bool HandleMouseButtonDownEvent(FSlateApplication& SlateApp, const FPointerEvent& Event) override;
+		virtual bool HandleMouseButtonUpEvent(FSlateApplication& SlateApp, const FPointerEvent& Event) override;
+		virtual bool HandleMouseButtonDoubleClickEvent(FSlateApplication& SlateApp, const FPointerEvent& Event) override;
+		virtual bool HandleMouseWheelOrGestureEvent(FSlateApplication& SlateApp, const FPointerEvent& Event, const FPointerEvent* GestureEvent) override;
+		virtual const TCHAR* GetDebugName() const override { return TEXT("PIE Raw Input Recorder/Replayer"); }
+
+	private:
+		enum class EMode : uint8 { Idle, Recording, Replaying };
+		bool FindViewport(TSharedPtr<SViewport>& OutWidget, TSharedPtr<SWindow>& OutWindow, FGeometry& OutGeometry) const;
+		bool IsTargetWindowActive(FSlateApplication& SlateApp) const;
+		bool IsKeyboardTargetActive(FSlateApplication& SlateApp) const;
+		bool IsInsideViewport(const FVector2D& ScreenPosition, FVector2D& OutLocalPosition) const;
+		bool RegisterInputProcessor();
+		void UnregisterInputProcessor();
+		FPIEInputEvent MakePointerEvent(EPIEInputEventType Type, const FPointerEvent& Event) const;
+		FPIEInputEvent MakeKeyEvent(EPIEInputEventType Type, const FKeyEvent& Event) const;
+		void Record(FPIEInputEvent&& Event);
+		bool Dispatch(const FPIEInputEvent& Event, FString& OutError);
+		void ReleaseHeldInputs(FString& OutError);
+		FModifierKeysState MakeModifiers(const FPIEInputEvent& Event) const;
+		TSet<FKey> MakePressedButtons(const FPIEInputEvent& Event) const;
+		FVector2D ToScreenPosition(const FVector2D& LocalPosition) const;
+		FVector2D ToScreenDelta(const FVector2D& LocalPosition, const FVector2D& LocalDelta) const;
+
+		TSharedPtr<FPIEInputRouter> RegisteredHandle;
+		TWeakPtr<SViewport> ViewportWidget;
+		TWeakPtr<SWindow> TargetWindow;
+		TWeakObjectPtr<UWorld> RecordingWorld;
+		EMode Mode = EMode::Idle;
+		FVector2D RecordedViewportSize = FVector2D::ZeroVector;
+		FVector2D ReplayViewportSize = FVector2D::ZeroVector;
+		double RecordingBaseTime = 0.0;
+		int32 NextEventOrder = 0;
+		int32 NextReplayEvent = 0;
+		int32 ExecutedEventCount = 0;
+		bool bDispatchingSynthetic = false;
+		TArray<FPIEInputEvent> RecordedEvents;
+		TArray<FPIEInputEvent> ReplayEvents;
+		TSet<FKey> RecordingKeysDown;
+		TSet<FKey> PhysicalKeysSuppressed;
+		TSet<FKey> PhysicalButtonsSuppressed;
+		TMap<FKey, FPIEInputEvent> InjectedKeysDown;
+		TMap<FKey, FPIEInputEvent> InjectedButtonsDown;
+		FString LastError;
 	};
 
 	class FPIEInputRecorder
@@ -127,9 +207,6 @@ namespace UE_PIE_Automation
 		FRecorderFinishResult FinaliseCurrent();
 		void ApplyFPSPin(UWorld* PIEWorld);
 
-		// Run-extraction encoder: builds sequence.json steps from the row buffer.
-		void BuildSequenceSteps(FSequence& OutSequence) const;
-
 		FRecorderArmConfig Pending;
 		bool bArmed = false;
 		ERecorderState State = ERecorderState::Idle;
@@ -143,6 +220,10 @@ namespace UE_PIE_Automation
 		TArray<FTrackedActorRow> ActorRows;
 		TMap<FString, TWeakObjectPtr<AActor>> TrackedActorCache;
 		TArray<FMarker> Markers;
+		TArray<FPIEInputEvent> InputEvents;
+		FVector2D RecordedViewportSize = FVector2D::ZeroVector;
+		bool bRawInputStarted = false;
+		FString InputError;
 		double StartTime = 0.0;
 		FString StartedAt;
 
