@@ -46,7 +46,7 @@ namespace UE_PIE_Automation
 		// Legacy capture interval. 0 = off; used only when CaptureFPS is 0.
 		int32 CaptureFrameEvery = 0;
 		// Preferred capture rate; captures are written as PNG files.
-		int32 CaptureFPS = 15;
+		int32 CaptureFPS = 5;
 		int32 CaptureResolutionPercent = 50;
 		// Multi-client PIE: which local player to drive injections / sample
 		// for drift. 0 = first (default), 1+ selects subsequent local players.
@@ -81,6 +81,7 @@ namespace UE_PIE_Automation
 		int32 FramesCaptured = 0;
 		int32 CaptureFramesCompleted = 0;
 		int32 CaptureFramesPending = 0;
+		int32 CaptureFramesDropped = 0;
 		FString CaptureError;
 		int32 InputEventsExecuted = 0;
 		FString InputError;
@@ -128,6 +129,7 @@ namespace UE_PIE_Automation
 		FString InputError;
 		FString CaptureError;
 		int32 CaptureFramesCompleted = 0;
+		int32 CaptureFramesDropped = 0;
 		int32 FramesCaptured = 0;
 		FString CaptureDir;
 		// Kept frames + the labeled contact sheet (item 1b). FrameDir holds the

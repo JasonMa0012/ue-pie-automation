@@ -17,6 +17,7 @@
 #include "Math/UnrealMathUtility.h"
 #include "Containers/StringConv.h"
 #include "Input/Events.h"
+#include "InputCoreTypes.h"
 #include "Layout/Geometry.h"
 #include "Slate/SceneViewport.h"
 #include "Widgets/SViewport.h"
@@ -685,6 +686,7 @@ namespace UE_PIE_Automation
 		ReplayEvents = Sequence.InputEvents;
 		NextReplayEvent = 0;
 		ExecutedEventCount = 0;
+		bReplayCancelRequested = false;
 		PhysicalKeysSuppressed.Reset();
 		PhysicalButtonsSuppressed.Reset();
 		InjectedKeysDown.Reset();
@@ -718,10 +720,18 @@ namespace UE_PIE_Automation
 		Mode = EMode::Idle;
 		ReplayEvents.Reset();
 		NextReplayEvent = 0;
+		bReplayCancelRequested = false;
 		PhysicalKeysSuppressed.Reset();
 		PhysicalButtonsSuppressed.Reset();
-		UnregisterInputProcessor();
+		if (!bEscapeKeyUpPending) UnregisterInputProcessor();
 		return Count;
+	}
+
+	bool FPIEInputRouter::ConsumeReplayCancelRequested()
+	{
+		const bool bRequested = bReplayCancelRequested;
+		bReplayCancelRequested = false;
+		return bRequested;
 	}
 
 	int32 FPIEInputRouter::GetRecordedEventCount() const
@@ -854,6 +864,13 @@ namespace UE_PIE_Automation
 		if (Mode == EMode::Replaying)
 		{
 			const FKey Key = Event.GetKey();
+			if (Key == EKeys::Escape && IsTargetWindowActive(SlateApp))
+			{
+				PhysicalKeysSuppressed.Add(Key);
+				bEscapeKeyUpPending = true;
+				bReplayCancelRequested = true;
+				return true;
+			}
 			if (PhysicalKeysSuppressed.Contains(Key) || IsKeyboardTargetActive(SlateApp))
 			{
 				PhysicalKeysSuppressed.Add(Key);
@@ -866,6 +883,13 @@ namespace UE_PIE_Automation
 	bool FPIEInputRouter::HandleKeyUpEvent(FSlateApplication& SlateApp, const FKeyEvent& Event)
 	{
 		if (bDispatchingSynthetic) return false;
+		if (bEscapeKeyUpPending && Event.GetKey() == EKeys::Escape)
+		{
+			bEscapeKeyUpPending = false;
+			PhysicalKeysSuppressed.Remove(EKeys::Escape);
+			if (Mode == EMode::Idle) UnregisterInputProcessor();
+			return true;
+		}
 		if (Mode == EMode::Recording)
 		{
 			FVector2D Local;

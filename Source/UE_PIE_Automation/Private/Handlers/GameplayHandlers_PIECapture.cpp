@@ -7,6 +7,7 @@
 #include "HandlerUtils.h"
 #include "PIE/PIEViewportCapture.h"
 #include "PIE/PIEContactSheet.h"
+#include "UE_PIE_AutomationModule.h"
 #include "Editor.h"
 #include "Editor/EditorEngine.h"
 #include "Misc/CoreDelegates.h"

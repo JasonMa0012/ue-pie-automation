@@ -116,6 +116,7 @@ namespace UE_PIE_Automation
 		bool BeginReplay(const FSequence& Sequence, FString& OutError);
 		bool DispatchDue(double ElapsedMs, FString& OutError);
 		int32 EndReplay();
+		bool ConsumeReplayCancelRequested();
 
 		int32 GetExecutedEventCount() const { return ExecutedEventCount; }
 		int32 GetRecordedEventCount() const;
@@ -161,6 +162,8 @@ namespace UE_PIE_Automation
 		int32 NextReplayEvent = 0;
 		int32 ExecutedEventCount = 0;
 		bool bDispatchingSynthetic = false;
+		bool bReplayCancelRequested = false;
+		bool bEscapeKeyUpPending = false;
 		TArray<FPIEInputEvent> RecordedEvents;
 		TArray<FPIEInputEvent> ReplayEvents;
 		TSet<FKey> RecordingKeysDown;

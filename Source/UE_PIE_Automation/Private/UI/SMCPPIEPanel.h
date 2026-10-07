@@ -47,7 +47,7 @@ private:
 	// Recordings list
 	TSharedPtr<SVerticalBox> RecordingsListBox;
 	TArray<FString> CachedRecordingIds;
-	int32 CaptureFPS = 15;
+	int32 CaptureFPS = 5;
 	int32 CaptureResolutionPercent = 50;
 
 	// Profiles list

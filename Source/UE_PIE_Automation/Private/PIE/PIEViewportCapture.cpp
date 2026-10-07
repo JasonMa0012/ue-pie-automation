@@ -14,12 +14,14 @@
 #endif
 #include "Misc/CoreDelegates.h"
 #include "Misc/FileHelper.h"
+#include "Layout/WidgetPath.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
 #include "Rendering/SlateRenderer.h"
+#include "RenderingThread.h"
 #include "RHIGPUReadback.h"
 #include "RHICommandList.h"
-#include "SceneViewport.h"
+#include "Slate/SceneViewport.h"
 #include "ScreenPass.h"
 #include "Layout/Geometry.h"
 #include "RHIStaticStates.h"
@@ -36,7 +38,8 @@ namespace UE_PIE_Automation
 
 	bool MakeCaptureRect(FVector2D Origin, FVector2D Size, FIntPoint BufferSize, FIntRect& OutRect)
 	{
-		if (BufferSize.X <= 0 || BufferSize.Y <= 0 || Size.X <= 0.0 || Size.Y <= 0.0 || Origin.ContainsNaN() || Size.ContainsNaN()) return false;
+		if (BufferSize.X <= 0 || BufferSize.Y <= 0 || Size.X <= 0.0 || Size.Y <= 0.0 ||
+			!FMath::IsFinite(Origin.X) || !FMath::IsFinite(Origin.Y) || !FMath::IsFinite(Size.X) || !FMath::IsFinite(Size.Y)) return false;
 		OutRect = FIntRect(
 			FMath::Clamp(FMath::RoundToInt(Origin.X * BufferSize.X), 0, BufferSize.X),
 			FMath::Clamp(FMath::RoundToInt(Origin.Y * BufferSize.Y), 0, BufferSize.Y),
@@ -142,26 +145,38 @@ namespace UE_PIE_Automation
 		}
 	}
 
-	bool FPIEViewportCapture::RequestCapture(const FString& OutputPath)
+	bool FPIEViewportCapture::RequestCapture(const FString& OutputPath, bool bDropIfBusy)
 	{
 		check(IsInGameThread());
-		const double Deadline = FPlatformTime::Seconds() + CaptureTimeoutSeconds;
-		while (OutstandingCount.load(std::memory_order_acquire) >= MaxInFlightCaptures)
-		{
-			PumpCompletedCaptures();
-			if (OutstandingCount.load(std::memory_order_acquire) < MaxInFlightCaptures) break;
-			if (FPlatformTime::Seconds() >= Deadline)
-			{
-				AppendError(TEXT("BackBuffer capture queue made no progress for 30 seconds"));
-				return false;
-			}
-			FPlatformProcess::Sleep(0.001f);
-		}
-
 		if (!bEnabled.load(std::memory_order_acquire))
 		{
 			AppendError(TEXT("BackBuffer capture is not enabled"));
 			return false;
+		}
+		if (bDropIfBusy && OutstandingCount.load(std::memory_order_acquire) >= MaxInFlightCaptures)
+		{
+			DroppedCount.fetch_add(1, std::memory_order_release);
+			return false;
+		}
+		if (!bDropIfBusy)
+		{
+			const double Deadline = FPlatformTime::Seconds() + CaptureTimeoutSeconds;
+			while (OutstandingCount.load(std::memory_order_acquire) >= MaxInFlightCaptures)
+			{
+				ENQUEUE_RENDER_COMMAND(PumpPIECaptureReadbacks)([this](FRHICommandListImmediate&)
+				{
+					PumpReadyReadbacks_RenderThread();
+				});
+				FlushRenderingCommands();
+				PumpCompletedCaptures();
+				if (OutstandingCount.load(std::memory_order_acquire) < MaxInFlightCaptures) break;
+				if (FPlatformTime::Seconds() >= Deadline)
+				{
+					AppendError(TEXT("BackBuffer capture queue made no progress for 30 seconds"));
+					return false;
+				}
+				FPlatformProcess::Sleep(0.001f);
+			}
 		}
 		{
 			FScopeLock SL(&Lock);
@@ -184,6 +199,11 @@ namespace UE_PIE_Automation
 	int32 FPIEViewportCapture::GetPendingCount() const
 	{
 		return OutstandingCount.load(std::memory_order_acquire);
+	}
+
+	int32 FPIEViewportCapture::GetDroppedCount() const
+	{
+		return DroppedCount.load(std::memory_order_acquire);
 	}
 
 	FString FPIEViewportCapture::GetLastError() const
@@ -209,6 +229,11 @@ namespace UE_PIE_Automation
 		const double Deadline = FPlatformTime::Seconds() + CaptureTimeoutSeconds;
 		while (OutstandingCount.load(std::memory_order_acquire) > 0)
 		{
+			ENQUEUE_RENDER_COMMAND(DrainPIECaptureReadbacks)([this](FRHICommandListImmediate&)
+			{
+				PumpReadyReadbacks_RenderThread();
+			});
+			FlushRenderingCommands();
 			PumpCompletedCaptures();
 			if (OutstandingCount.load(std::memory_order_acquire) == 0) break;
 			if (FPlatformTime::Seconds() >= Deadline)
@@ -227,16 +252,22 @@ namespace UE_PIE_Automation
 		FViewport* PIEViewport = GEditor ? GEditor->GetPIEViewport() : nullptr;
 		FSceneViewport* SceneViewport = PIEViewport ? PIEViewport->AsSceneViewport() : nullptr;
 		TSharedPtr<SViewport> Viewport = SceneViewport ? SceneViewport->GetViewportWidget().Pin() : nullptr;
-		TSharedPtr<SWindow> Window = Viewport.IsValid() ? SlateApp.FindWidgetWindow(Viewport.ToSharedRef()) : nullptr;
-		if (!Viewport.IsValid() || !Window.IsValid())
+		FWidgetPath ViewportPath;
+		TSharedPtr<SWindow> Window = Viewport.IsValid()
+			? SlateApp.FindWidgetWindow(Viewport.ToSharedRef(), ViewportPath)
+			: nullptr;
+		if (!Viewport.IsValid() || !Window.IsValid() || !ViewportPath.IsValid())
 		{
 			TargetWindow.store(nullptr, std::memory_order_release);
 			bHaveViewportRegion.store(false, std::memory_order_release);
 			return;
 		}
 
-		const FGeometry WindowGeometry = Window->GetWindowGeometryInWindow();
-		const FGeometry ViewportGeometry = Viewport->GetCachedGeometry();
+		// FindWidgetWindow builds this path from GetWindowGeometryInScreen(), so
+		// convert its screen-space widget geometry through the same root. Mixing
+		// GetCachedGeometry() with window-local geometry offsets floating PIE crops.
+		const FGeometry WindowGeometry = Window->GetWindowGeometryInScreen();
+		const FGeometry& ViewportGeometry = ViewportPath.Widgets.Last().Geometry;
 		const FVector2D WindowSize = WindowGeometry.GetLocalSize();
 		const FVector2D WindowAbsoluteSize = WindowGeometry.GetAbsoluteSize();
 		if (WindowSize.X <= 0.0 || WindowSize.Y <= 0.0 || WindowAbsoluteSize.X <= 0.0 || WindowAbsoluteSize.Y <= 0.0)
@@ -287,13 +318,23 @@ namespace UE_PIE_Automation
 		FCaptureRequest Request;
 		FVector2D ViewportOrigin;
 		FVector2D ViewportSize;
+		bool bHasRequest = false;
 		{
 			FScopeLock SL(&Lock);
-			if (PendingRequests.IsEmpty()) return;
-			Request = MoveTemp(PendingRequests[0]);
-			PendingRequests.RemoveAt(0, 1, EAllowShrinking::No);
-			ViewportOrigin = ViewportOriginInWindow;
-			ViewportSize = ViewportSizeInWindow;
+			if (!PendingRequests.IsEmpty())
+			{
+				Request = MoveTemp(PendingRequests[0]);
+				PendingRequests.RemoveAt(0, 1, EAllowShrinking::No);
+				ViewportOrigin = ViewportOriginInWindow;
+				ViewportSize = ViewportSizeInWindow;
+				bHasRequest = true;
+			}
+		}
+
+		if (!bHasRequest)
+		{
+			PumpReadyReadbacks_RenderThread();
+			return;
 		}
 
 		FRHITexture* BackBuffer = ViewportProvider.GetBackBufferResource();
@@ -320,9 +361,10 @@ namespace UE_PIE_Automation
 		FRDGBuilder GraphBuilder(RHICmdList);
 		FRDGTextureRef InputTexture = GraphBuilder.RegisterExternalTexture(
 			CreateRenderTarget(BackBuffer, TEXT("PIEBackBufferCaptureInput")));
+		const ETextureCreateFlags ColorSpaceFlags = BackBuffer->GetDesc().Flags & TexCreate_SRGB;
 		FRDGTextureRef OutputTexture = GraphBuilder.CreateTexture(
 			FRDGTextureDesc::Create2D(OutputSize, PF_B8G8R8A8, FClearValueBinding::None,
-				TexCreate_RenderTargetable | TexCreate_ShaderResource | TexCreate_SRGB),
+				TexCreate_RenderTargetable | TexCreate_ShaderResource | ColorSpaceFlags),
 			TEXT("PIEBackBufferCaptureOutput"));
 
 		FScreenPassViewInfo ViewInfo(GMaxRHIFeatureLevel);
@@ -334,20 +376,16 @@ namespace UE_PIE_Automation
 		AddEnqueueCopyPass(GraphBuilder, Readback.Get(), OutputTexture);
 		GraphBuilder.Execute();
 
-		FScopeLock SL(&Lock);
-		PendingReadbacks.Add({MoveTemp(Request), MoveTemp(Readback), OutputSize});
+		{
+			FScopeLock SL(&Lock);
+			PendingReadbacks.Add({MoveTemp(Request), MoveTemp(Readback), OutputSize});
+		}
+		PumpReadyReadbacks_RenderThread();
 	}
 
-	void FPIEViewportCapture::PumpCompletedCaptures()
+	void FPIEViewportCapture::PumpReadyReadbacks_RenderThread()
 	{
-		check(IsInGameThread());
-		struct FReadyImage
-		{
-			FCaptureRequest Request;
-			FIntPoint Size;
-			TArray<FColor> Pixels;
-		};
-		TArray<FReadyImage> ReadyImages;
+		check(IsInRenderingThread());
 		{
 			FScopeLock SL(&Lock);
 			for (int32 Index = PendingReadbacks.Num() - 1; Index >= 0; --Index)
@@ -371,40 +409,50 @@ namespace UE_PIE_Automation
 					continue;
 				}
 
-				FReadyImage& Ready = ReadyImages.AddDefaulted_GetRef();
-				Ready.Size = Pending.Size;
-				if (!CopyReadbackRows(Source, RowPitchPixels, Ready.Size, Ready.Pixels))
+				TArray<FColor> Pixels;
+				if (!CopyReadbackRows(Source, RowPitchPixels, Pending.Size, Pixels))
 				{
 					Pending.Readback->Unlock();
 					if (LastError.IsEmpty()) LastError = FString::Printf(TEXT("GPU readback returned an invalid row pitch for %s"), *Pending.Request.Path);
 					PendingReadbacks.RemoveAtSwap(Index, 1, EAllowShrinking::No);
 					CompletedCount.fetch_add(1, std::memory_order_release);
 					OutstandingCount.fetch_sub(1, std::memory_order_release);
-					ReadyImages.Pop(EAllowShrinking::No);
 					continue;
 				}
-				Ready.Request = MoveTemp(Pending.Request);
+
+				FCaptureRequest Request = MoveTemp(Pending.Request);
+				const FIntPoint Size = Pending.Size;
 				Pending.Readback->Unlock();
 				PendingReadbacks.RemoveAtSwap(Index, 1, EAllowShrinking::No);
+
+				const bool bJpeg = bUseJpeg.load(std::memory_order_acquire);
+				const int32 Quality = JpegQuality.load(std::memory_order_acquire);
+				PendingWrites.Add(Async(EAsyncExecution::ThreadPool,
+					[Request = MoveTemp(Request), Size, Pixels = MoveTemp(Pixels), bJpeg, Quality]() mutable
+					{
+						const bool bSaved = EncodeColorsToFile(Pixels, Size.X, Size.Y, bJpeg, Quality, Request.Path);
+						return TPair<FString, bool>(Request.Path, bSaved);
+					}));
 			}
 		}
+	}
 
-		for (FReadyImage& Ready : ReadyImages)
+	void FPIEViewportCapture::PumpCompletedCaptures()
+	{
+		check(IsInGameThread());
+		TArray<TFuture<TPair<FString, bool>>> ReadyWrites;
 		{
-			const bool bJpeg = bUseJpeg.load(std::memory_order_acquire);
-			const int32 Quality = JpegQuality.load(std::memory_order_acquire);
-			PendingWrites.Add(Async(EAsyncExecution::ThreadPool,
-				[Request = MoveTemp(Ready.Request), Size = Ready.Size, Pixels = MoveTemp(Ready.Pixels), bJpeg, Quality]() mutable
-				{
-					const bool bSaved = EncodeColorsToFile(Pixels, Size.X, Size.Y, bJpeg, Quality, Request.Path);
-					return TPair<FString, bool>(Request.Path, bSaved);
-				}));
+			FScopeLock SL(&Lock);
+			for (int32 Index = PendingWrites.Num() - 1; Index >= 0; --Index)
+			{
+				if (!PendingWrites[Index].IsReady()) continue;
+				ReadyWrites.Add(MoveTemp(PendingWrites[Index]));
+				PendingWrites.RemoveAtSwap(Index, 1, EAllowShrinking::No);
+			}
 		}
-
-		for (int32 Index = PendingWrites.Num() - 1; Index >= 0; --Index)
+		for (TFuture<TPair<FString, bool>>& Write : ReadyWrites)
 		{
-			if (!PendingWrites[Index].IsReady()) continue;
-			const TPair<FString, bool> Result = PendingWrites[Index].Get();
+			const TPair<FString, bool> Result = Write.Get();
 			if (Result.Value)
 			{
 				CapturedCount.fetch_add(1, std::memory_order_release);
@@ -415,7 +463,6 @@ namespace UE_PIE_Automation
 			}
 			CompletedCount.fetch_add(1, std::memory_order_release);
 			OutstandingCount.fetch_sub(1, std::memory_order_release);
-			PendingWrites.RemoveAtSwap(Index, 1, EAllowShrinking::No);
 		}
 	}
 

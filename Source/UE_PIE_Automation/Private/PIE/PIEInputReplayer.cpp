@@ -518,6 +518,18 @@ namespace UE_PIE_Automation
 
 	void FPIEInputReplayer::OnEndFrame()
 	{
+		if (State == EReplayerState::Replaying && FPIEInputRouter::Get().ConsumeReplayCancelRequested())
+		{
+			const bool bAutoStopPIE = Pending.bAutoStopPIE;
+			const FReplayerFinishResult Result = ForceStop();
+			UE_LOG(LogUE_PIE_Automation, Log, TEXT("[PIE-REP] Replay cancelled by Escape after %d input events"),
+				Result.InputEventsExecuted);
+			if (bAutoStopPIE && GEditor && GEditor->PlayWorld)
+			{
+				GEditor->RequestEndPlayMap();
+			}
+			return;
+		}
 		if (State == EReplayerState::Idle) return;
 		if (State == EReplayerState::Completed)
 		{
@@ -700,7 +712,7 @@ namespace UE_PIE_Automation
 				{
 					const uint64 FrameIdx = CaptureFrameCounter;
 					const FString FullPath = CaptureDir / FString::Printf(TEXT("frame_%05llu.png"), FrameIdx);
-					if (ViewportCapture->RequestCapture(FullPath))
+					if (ViewportCapture->RequestCapture(FullPath, /*bDropIfBusy*/true))
 					{
 						++CaptureFrameCounter;
 					}
@@ -1001,6 +1013,7 @@ namespace UE_PIE_Automation
 			FramesCaptured = ViewportCapture->GetCapturedCount();
 			R.FramesCaptured = FramesCaptured;
 			R.CaptureFramesCompleted = ViewportCapture->GetCompletedCount();
+			R.CaptureFramesDropped = ViewportCapture->GetDroppedCount();
 			R.CaptureError = ViewportCapture->GetLastError();
 			ViewportCapture.Reset();
 		}
@@ -1085,10 +1098,17 @@ namespace UE_PIE_Automation
 		S.MaxVelocityDriftCms = MaxVelDriftCms;
 		S.FramesCaptured = FramesCaptured;
 		S.CaptureError = CaptureError;
-		if (ViewportCapture.IsValid())
+		if (State != EReplayerState::Idle && ViewportCapture.IsValid())
 		{
 			S.CaptureFramesCompleted = ViewportCapture->GetCompletedCount();
 			S.CaptureFramesPending = ViewportCapture->GetPendingCount();
+			S.CaptureFramesDropped = ViewportCapture->GetDroppedCount();
+		}
+		else if (State == EReplayerState::Idle && bHasLastFinish)
+		{
+			S.CaptureFramesCompleted = LastFinish.CaptureFramesCompleted;
+			S.CaptureFramesDropped = LastFinish.CaptureFramesDropped;
+			S.CaptureError = LastFinish.CaptureError;
 		}
 		S.InputEventsExecuted = InputEventsExecuted;
 		S.InputError = InputError;
@@ -1096,8 +1116,6 @@ namespace UE_PIE_Automation
 		if (bHasLastFinish)
 		{
 			S.bHasLastResult = true;
-			S.CaptureFramesCompleted = LastFinish.CaptureFramesCompleted;
-			S.CaptureError = LastFinish.CaptureError;
 			S.LastInputEventsExecuted = LastFinish.InputEventsExecuted;
 			S.LastInputError = LastFinish.InputError;
 			S.LastDriftReportPath = LastFinish.DriftReportPath;

@@ -97,6 +97,7 @@ namespace
 		R->SetNumberField(TEXT("frames_captured"), S.FramesCaptured);
 		R->SetNumberField(TEXT("capture_frames_completed"), S.CaptureFramesCompleted);
 		R->SetNumberField(TEXT("capture_frames_pending"), S.CaptureFramesPending);
+		R->SetNumberField(TEXT("capture_frames_dropped"), S.CaptureFramesDropped);
 		if (!S.CaptureError.IsEmpty()) R->SetStringField(TEXT("capture_error"), S.CaptureError);
 		R->SetNumberField(TEXT("input_events_executed"), S.InputEventsExecuted);
 		if (!S.InputError.IsEmpty()) R->SetStringField(TEXT("input_error"), S.InputError);
@@ -194,7 +195,7 @@ namespace
 			Params->TryGetNumberField(TEXT("capture_frame_every"), D);
 			Cfg.CaptureFrameEvery = FMath::Max(0, static_cast<int32>(D));
 		}
-		Cfg.CaptureFPS = FMath::Clamp(OptionalInt(Params, TEXT("capture_fps"), 15), 1, 240);
+		Cfg.CaptureFPS = FMath::Clamp(OptionalInt(Params, TEXT("capture_fps"), 5), 0, 240);
 		Cfg.CaptureResolutionPercent = FMath::Clamp(
 			OptionalInt(Params, TEXT("capture_resolution_percent"), 50), 1, 100);
 
@@ -324,6 +325,7 @@ TSharedPtr<FJsonValue> FGameplayHandlers::PieReplayStop(const TSharedPtr<FJsonOb
 	Result->SetNumberField(TEXT("input_events_executed"), F.InputEventsExecuted);
 	Result->SetNumberField(TEXT("frames_captured"), F.FramesCaptured);
 	Result->SetNumberField(TEXT("capture_frames_completed"), F.CaptureFramesCompleted);
+	Result->SetNumberField(TEXT("capture_frames_dropped"), F.CaptureFramesDropped);
 	if (!F.CaptureError.IsEmpty()) Result->SetStringField(TEXT("capture_error"), F.CaptureError);
 	if (F.FrameCount > 0)
 	{

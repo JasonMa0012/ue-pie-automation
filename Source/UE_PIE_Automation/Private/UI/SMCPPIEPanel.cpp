@@ -601,11 +601,12 @@ TSharedRef<SWidget> SMCPPIEPanel::BuildRecordingsSection()
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 			[
 				SNew(SSpinBox<int32>)
-				.MinValue(1)
+				.MinValue(0)
 				.MaxValue(120)
 				.Delta(1)
+				.ToolTipText(FText::FromString(TEXT("Set to 0 to disable screenshot capture during replay.")))
 				.Value_Lambda([this]() { return CaptureFPS; })
-				.OnValueChanged_Lambda([this](int32 V) { CaptureFPS = FMath::Clamp(V, 1, 120); })
+				.OnValueChanged_Lambda([this](int32 V) { CaptureFPS = FMath::Clamp(V, 0, 120); })
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0, 2, 0)
 			[

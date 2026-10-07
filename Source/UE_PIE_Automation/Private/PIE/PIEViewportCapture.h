@@ -19,10 +19,11 @@ namespace UE_PIE_Automation
 		~FPIEViewportCapture();
 
 		void SetEnabled(bool bEnable);
-		bool RequestCapture(const FString& OutputPath);
+		bool RequestCapture(const FString& OutputPath, bool bDropIfBusy = false);
 		int32 GetCapturedCount() const;
 		int32 GetCompletedCount() const;
 		int32 GetPendingCount() const;
+		int32 GetDroppedCount() const;
 		FString GetLastError() const;
 
 		void SetOutputFormat(bool bInUseJpeg, int32 InQuality);
@@ -46,6 +47,7 @@ namespace UE_PIE_Automation
 		void OnSlatePreTick(float DeltaTime);
 		void OnEndFrame();
 		void OnBackBufferReadyToPresent(SWindow& Window, ISlateViewportProvider& ViewportProvider);
+		void PumpReadyReadbacks_RenderThread();
 		void PumpCompletedCaptures();
 		void FailRequest(const FCaptureRequest& Request, const FString& Reason);
 		void AppendError(const FString& Reason);
@@ -55,6 +57,7 @@ namespace UE_PIE_Automation
 		std::atomic<int32> CapturedCount{0};
 		std::atomic<int32> CompletedCount{0};
 		std::atomic<int32> OutstandingCount{0};
+		std::atomic<int32> DroppedCount{0};
 		std::atomic<const SWindow*> TargetWindow{nullptr};
 		std::atomic<bool> bHaveViewportRegion{false};
 		FVector2D ViewportOriginInWindow = FVector2D::ZeroVector;
