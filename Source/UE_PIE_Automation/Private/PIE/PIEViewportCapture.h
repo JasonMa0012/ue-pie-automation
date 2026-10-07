@@ -1,51 +1,73 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "SceneViewExtension.h"
 #include "Async/Future.h"
 #include "HAL/CriticalSection.h"
+#include "RHIGPUReadback.h"
 #include <atomic>
+
+class SWindow;
+class FRHITexture;
+class ISlateViewportProvider;
 
 namespace UE_PIE_Automation
 {
+	class FPIEViewportCapture
+	{
+	public:
+		FPIEViewportCapture() = default;
+		~FPIEViewportCapture();
 
-class FPIEViewportCapture : public FSceneViewExtensionBase
-{
-public:
-	FPIEViewportCapture(const FAutoRegister& AutoReg);
-	virtual ~FPIEViewportCapture() override;
+		void SetEnabled(bool bEnable);
+		bool RequestCapture(const FString& OutputPath);
+		int32 GetCapturedCount() const;
+		int32 GetCompletedCount() const;
+		int32 GetPendingCount() const;
+		FString GetLastError() const;
 
-	virtual void SetupViewFamily(FSceneViewFamily& InViewFamily) override {}
-	virtual void SetupView(FSceneViewFamily& InViewFamily, FSceneView& InView) override {}
-	virtual void BeginRenderViewFamily(FSceneViewFamily& InViewFamily) override {}
-	virtual void PostRenderViewFamily_RenderThread(FRDGBuilder& GraphBuilder, FSceneViewFamily& InViewFamily) override;
-	virtual bool IsActiveThisFrame_Internal(const FSceneViewExtensionContext& Context) const override;
+		void SetOutputFormat(bool bInUseJpeg, int32 InQuality);
+		void SetResolutionPercent(int32 InPercent);
+		void FlushPending();
 
-	void SetEnabled(bool bEnable);
-	void RequestCapture(const FString& OutputPath);
-	int32 GetCapturedCount() const;
+	private:
+		struct FCaptureRequest
+		{
+			FString Path;
+			double RequestedAt = 0.0;
+		};
 
-	// Output encoding for subsequent captures. The path extension passed to
-	// RequestCapture should match. PNG is lossless; its quality value maps to a
-	// zlib compression level rather than changing image fidelity.
-	void SetOutputFormat(bool bInUseJpeg, int32 InQuality);
-	void SetResolutionPercent(int32 InPercent);
+		struct FPendingReadback
+		{
+			FCaptureRequest Request;
+			TUniquePtr<FRHIGPUTextureReadback> Readback;
+			FIntPoint Size = FIntPoint::ZeroValue;
+		};
 
-	// Wait for all queued image writes. Call from the game thread at teardown
-	// before generating a contact sheet or GIF.
-	void FlushPending();
+		void OnSlatePreTick(float DeltaTime);
+		void OnEndFrame();
+		void OnBackBufferReadyToPresent(SWindow& Window, ISlateViewportProvider& ViewportProvider);
+		void PumpCompletedCaptures();
+		void FailRequest(const FCaptureRequest& Request, const FString& Reason);
+		void AppendError(const FString& Reason);
 
-private:
-	std::atomic<bool> bEnabled{false};
-	std::atomic<bool> bUseJpeg{true};
-	std::atomic<int32> JpegQuality{80};
-	std::atomic<int32> ResolutionPercent{100};
-	mutable FCriticalSection Lock;
-	FString PendingPath;
-	// Futures are appended on the render thread and joined by FlushPending after
-	// FlushRenderingCommands() has stopped further render-thread mutations.
-	TArray<TFuture<bool>> PendingWrites;
-	std::atomic<int32> CapturedCount{0};
-};
-
-} // namespace UE_PIE_Automation
+		std::atomic<bool> bEnabled{false};
+		std::atomic<int32> ResolutionPercent{100};
+		std::atomic<int32> CapturedCount{0};
+		std::atomic<int32> CompletedCount{0};
+		std::atomic<int32> OutstandingCount{0};
+		std::atomic<const SWindow*> TargetWindow{nullptr};
+		std::atomic<bool> bHaveViewportRegion{false};
+		FVector2D ViewportOriginInWindow = FVector2D::ZeroVector;
+		FVector2D ViewportSizeInWindow = FVector2D::ZeroVector;
+		mutable FCriticalSection Lock;
+		TArray<FCaptureRequest> PendingRequests;
+		TArray<FPendingReadback> PendingReadbacks;
+		TArray<TFuture<TPair<FString, bool>>> PendingWrites;
+		FString LastError;
+		FDelegateHandle BackBufferHandle;
+		FDelegateHandle SlatePreTickHandle;
+		FDelegateHandle EndFrameHandle;
+		std::atomic<bool> bUseJpeg{false};
+		std::atomic<int32> JpegQuality{80};
+	};
+}

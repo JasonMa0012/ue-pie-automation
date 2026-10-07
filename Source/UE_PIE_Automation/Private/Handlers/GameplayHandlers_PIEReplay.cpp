@@ -95,6 +95,9 @@ namespace
 		R->SetNumberField(TEXT("max_position_drift_cm"), S.MaxPositionDriftCm);
 		R->SetNumberField(TEXT("max_velocity_drift_cms"), S.MaxVelocityDriftCms);
 		R->SetNumberField(TEXT("frames_captured"), S.FramesCaptured);
+		R->SetNumberField(TEXT("capture_frames_completed"), S.CaptureFramesCompleted);
+		R->SetNumberField(TEXT("capture_frames_pending"), S.CaptureFramesPending);
+		if (!S.CaptureError.IsEmpty()) R->SetStringField(TEXT("capture_error"), S.CaptureError);
 		R->SetNumberField(TEXT("input_events_executed"), S.InputEventsExecuted);
 		if (!S.InputError.IsEmpty()) R->SetStringField(TEXT("input_error"), S.InputError);
 		// pie_active lets an unattended replay_run caller poll until the PIE
@@ -320,6 +323,8 @@ TSharedPtr<FJsonValue> FGameplayHandlers::PieReplayStop(const TSharedPtr<FJsonOb
 	Result->SetNumberField(TEXT("executed_steps"), F.ExecutedSteps);
 	Result->SetNumberField(TEXT("input_events_executed"), F.InputEventsExecuted);
 	Result->SetNumberField(TEXT("frames_captured"), F.FramesCaptured);
+	Result->SetNumberField(TEXT("capture_frames_completed"), F.CaptureFramesCompleted);
+	if (!F.CaptureError.IsEmpty()) Result->SetStringField(TEXT("capture_error"), F.CaptureError);
 	if (F.FrameCount > 0)
 	{
 		Result->SetStringField(TEXT("frame_dir"), F.FrameDir);

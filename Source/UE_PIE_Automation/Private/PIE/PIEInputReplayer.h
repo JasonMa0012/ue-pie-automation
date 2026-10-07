@@ -79,6 +79,9 @@ namespace UE_PIE_Automation
 		float MaxPositionDriftCm = 0.f;
 		float MaxVelocityDriftCms = 0.f;
 		int32 FramesCaptured = 0;
+		int32 CaptureFramesCompleted = 0;
+		int32 CaptureFramesPending = 0;
+		FString CaptureError;
 		int32 InputEventsExecuted = 0;
 		FString InputError;
 		int32 LastInputEventsExecuted = 0;
@@ -123,6 +126,8 @@ namespace UE_PIE_Automation
 		int32 ExecutedSteps = 0;
 		int32 InputEventsExecuted = 0;
 		FString InputError;
+		FString CaptureError;
+		int32 CaptureFramesCompleted = 0;
 		int32 FramesCaptured = 0;
 		FString CaptureDir;
 		// Kept frames + the labeled contact sheet (item 1b). FrameDir holds the
@@ -186,9 +191,7 @@ namespace UE_PIE_Automation
 		// so OnEndFrame doesn't spam RequestEndPlayMap every frame while the
 		// session winds down.
 		bool bEndPIERequested = false;
-		// Completed replays keep ticking briefly so the render thread can consume
-		// the final queued viewport capture before PIE is torn down.
-		int32 CaptureDrainTicks = 0;
+		FString CaptureError;
 
 		FString CurrentSourceCSV;
 		FString CurrentDriftPath;

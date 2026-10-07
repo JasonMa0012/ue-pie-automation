@@ -31,6 +31,7 @@ public class UE_PIE_Automation : ModuleRules
 				"LevelEditor",
 				"ModelContextProtocol",
 				"RenderCore",
+				"Renderer",
 				"RHI",
 				"Projects",
 				"Slate",

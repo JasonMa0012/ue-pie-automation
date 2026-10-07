@@ -9,7 +9,6 @@
 #include "PIE/PIEContactSheet.h"
 #include "Editor.h"
 #include "Editor/EditorEngine.h"
-#include "SceneViewExtension.h"
 #include "Misc/CoreDelegates.h"
 #include "Misc/DateTime.h"
 #include "Misc/Paths.h"
@@ -34,14 +33,13 @@ namespace
 		bool bJpeg = true;
 		int32 Quality = 80;
 		bool bContactSheet = true;
-		int32 DrainTicks = 0;
 		bool bCapturing = true;
 		TSharedPtr<FPIEViewportCapture> Capture;
 		FDelegateHandle TickHandle;
 
 		void Start()
 		{
-			Capture = FSceneViewExtensions::NewExtension<FPIEViewportCapture>();
+			Capture = MakeShared<FPIEViewportCapture>();
 			Capture->SetOutputFormat(bJpeg, Quality);
 			Capture->SetEnabled(true);
 			TickHandle = FCoreDelegates::OnEndFrame.AddSP(this, &FCaptureSession::Tick);
@@ -58,7 +56,10 @@ namespace
 				{
 					const TCHAR* Ext = bJpeg ? TEXT("jpg") : TEXT("png");
 					const FString Path = Dir / FString::Printf(TEXT("frame_%05d.%s"), Index, Ext);
-					Capture->RequestCapture(Path);
+					if (!Capture->RequestCapture(Path))
+					{
+						UE_LOG(LogUE_PIE_Automation, Warning, TEXT("[CAPTURE] Request failed: %s"), *Capture->GetLastError());
+					}
 					++Index;
 					--Remaining;
 				}
@@ -66,13 +67,12 @@ namespace
 				if (Remaining <= 0)
 				{
 					bCapturing = false;
-					DrainTicks = 12; // let async image writes land before composing
 				}
 				return;
 			}
 
 			// Draining / finalising.
-			if (DrainTicks-- > 0 && bPIE)
+			if (Capture.IsValid() && bPIE && Capture->GetPendingCount() > 0)
 			{
 				return;
 			}
@@ -83,7 +83,11 @@ namespace
 		{
 			if (Capture.IsValid())
 			{
-				Capture->SetEnabled(false); // blocks-drains GPU readbacks
+				Capture->SetEnabled(false);
+				if (!Capture->GetLastError().IsEmpty())
+				{
+					UE_LOG(LogUE_PIE_Automation, Warning, TEXT("[CAPTURE] %s"), *Capture->GetLastError());
+				}
 				Capture.Reset();
 			}
 

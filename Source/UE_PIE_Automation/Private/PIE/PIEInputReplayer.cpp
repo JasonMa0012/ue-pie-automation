@@ -285,6 +285,7 @@ namespace UE_PIE_Automation
 		ActorDriftAccum.Reset();
 		FramesCaptured = 0;
 		CaptureFrameCounter = 0;
+		CaptureError.Reset();
 		NextCaptureTimeMs = 0.0;
 		bCaptureTimelineStarted = false;
 		ReplayFrameCounter = 0;
@@ -292,7 +293,6 @@ namespace UE_PIE_Automation
 		NextStepIndex = 0;
 		ExecutedSteps = 0;
 		bEndPIERequested = false;
-		CaptureDrainTicks = 0;
 		InputEventsExecuted = 0;
 		InputError.Reset();
 
@@ -449,7 +449,7 @@ namespace UE_PIE_Automation
 
 		if ((Pending.CaptureFPS > 0 || Pending.CaptureFrameEvery > 0) && !ViewportCapture.IsValid())
 		{
-			ViewportCapture = FSceneViewExtensions::NewExtension<FPIEViewportCapture>();
+			ViewportCapture = MakeShared<FPIEViewportCapture>();
 			ViewportCapture->SetOutputFormat(/*bJpeg*/false, /*Quality*/80);
 			ViewportCapture->SetResolutionPercent(Pending.CaptureResolutionPercent);
 			ViewportCapture->SetEnabled(true);
@@ -524,22 +524,25 @@ namespace UE_PIE_Automation
 			if (ViewportCapture.IsValid())
 			{
 				FramesCaptured = ViewportCapture->GetCapturedCount();
+				CaptureError = ViewportCapture->GetLastError();
 			}
 
 			if (Pending.bAutoStopPIE && !bEndPIERequested)
 			{
 				const bool bCaptureDrainComplete = !ViewportCapture.IsValid()
-					|| FramesCaptured >= static_cast<int32>(CaptureFrameCounter);
-				const bool bCaptureDrainTimedOut = !bCaptureDrainComplete && ++CaptureDrainTicks >= 4;
-				if (bCaptureDrainComplete || bCaptureDrainTimedOut)
+					|| (ViewportCapture->GetPendingCount() == 0
+						&& ViewportCapture->GetCompletedCount() >= static_cast<int32>(CaptureFrameCounter)
+						&& CaptureError.IsEmpty());
+				const bool bCaptureFailed = ViewportCapture.IsValid()
+					&& ViewportCapture->GetPendingCount() == 0 && !CaptureError.IsEmpty();
+				if (bCaptureDrainComplete || bCaptureFailed)
 				{
 					bEndPIERequested = true;
-					if (bCaptureDrainTimedOut)
+					if (bCaptureFailed)
 					{
 						UE_LOG(LogUE_PIE_Automation, Warning,
-							TEXT("[PIE-REP] Capture drain timed out (%d/%llu); final PNG may be missing"),
-							FramesCaptured,
-							CaptureFrameCounter);
+							TEXT("[PIE-REP] Capture failed after %d/%llu frames completed: %s"),
+							ViewportCapture->GetCompletedCount(), CaptureFrameCounter, *CaptureError);
 					}
 					else
 					{
@@ -695,9 +698,16 @@ namespace UE_PIE_Automation
 
 				if (bShouldCapture)
 				{
-					const uint64 FrameIdx = static_cast<uint64>(CaptureFrameCounter++);
+					const uint64 FrameIdx = CaptureFrameCounter;
 					const FString FullPath = CaptureDir / FString::Printf(TEXT("frame_%05llu.png"), FrameIdx);
-					ViewportCapture->RequestCapture(FullPath);
+					if (ViewportCapture->RequestCapture(FullPath))
+					{
+						++CaptureFrameCounter;
+					}
+					else
+					{
+						CaptureError = ViewportCapture->GetLastError();
+					}
 				}
 			}
 
@@ -910,6 +920,7 @@ namespace UE_PIE_Automation
 		}
 		R.FramesCaptured = FramesCaptured;
 		R.CaptureDir = CaptureDir;
+		R.CaptureError = CaptureError;
 
 		// Write drift.json when we had source frames to compare against.
 		if (SourceFrames.Num() > 0 && !CurrentDriftPath.IsEmpty())
@@ -986,10 +997,17 @@ namespace UE_PIE_Automation
 		RestoreFixedTimestep();
 		if (ViewportCapture.IsValid())
 		{
+			ViewportCapture->SetEnabled(false);
 			FramesCaptured = ViewportCapture->GetCapturedCount();
 			R.FramesCaptured = FramesCaptured;
-			ViewportCapture->SetEnabled(false);
+			R.CaptureFramesCompleted = ViewportCapture->GetCompletedCount();
+			R.CaptureError = ViewportCapture->GetLastError();
 			ViewportCapture.Reset();
+		}
+		if (!R.CaptureError.IsEmpty())
+		{
+			R.bSuccess = false;
+			if (R.Error.IsEmpty()) R.Error = R.CaptureError;
 		}
 
 		if (!CaptureDir.IsEmpty() && FramesCaptured > 0)
@@ -1066,12 +1084,20 @@ namespace UE_PIE_Automation
 		S.MaxPositionDriftCm = MaxPosDriftCm;
 		S.MaxVelocityDriftCms = MaxVelDriftCms;
 		S.FramesCaptured = FramesCaptured;
+		S.CaptureError = CaptureError;
+		if (ViewportCapture.IsValid())
+		{
+			S.CaptureFramesCompleted = ViewportCapture->GetCompletedCount();
+			S.CaptureFramesPending = ViewportCapture->GetPendingCount();
+		}
 		S.InputEventsExecuted = InputEventsExecuted;
 		S.InputError = InputError;
 		S.bPIEActive = (GEditor && GEditor->PlayWorld != nullptr);
 		if (bHasLastFinish)
 		{
 			S.bHasLastResult = true;
+			S.CaptureFramesCompleted = LastFinish.CaptureFramesCompleted;
+			S.CaptureError = LastFinish.CaptureError;
 			S.LastInputEventsExecuted = LastFinish.InputEventsExecuted;
 			S.LastInputError = LastFinish.InputError;
 			S.LastDriftReportPath = LastFinish.DriftReportPath;
