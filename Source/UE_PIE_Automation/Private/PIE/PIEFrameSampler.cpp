@@ -330,7 +330,7 @@ namespace UE_PIE_Automation
 		};
 
 		// Event bindings (BindAction calls on the pawn's EIC).
-		if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(Pawn->InputComponent))
+		if (UEnhancedInputComponent* EIC = Pawn ? Cast<UEnhancedInputComponent>(Pawn->InputComponent) : nullptr)
 		{
 			for (const TUniquePtr<FEnhancedInputActionEventBinding>& Bind : EIC->GetActionEventBindings())
 			{
@@ -366,9 +366,7 @@ namespace UE_PIE_Automation
 			: PIEWorld->GetFirstPlayerController();
 		if (!PC) return false;
 		APawn* Pawn = PC->GetPawn();
-		if (!Pawn || !Pawn->InputComponent) return false;
-
-		PawnClassPath = Pawn->GetClass()->GetPathName();
+		PawnClassPath = Pawn ? Pawn->GetClass()->GetPathName() : FString();
 		PIEWorldPath = PIEWorld->GetPathName();
 
 		DiscoverActions(PC, Pawn);
@@ -455,7 +453,6 @@ namespace UE_PIE_Automation
 		}
 
 		APawn* Pawn = PC->GetPawn();
-		if (!Pawn) return Row;
 
 		// Rescan for late-bound actions (IMCs added after initial attach).
 		{
@@ -468,7 +465,7 @@ namespace UE_PIE_Automation
 			}
 		}
 
-		if (Config.bCapturePawnState)
+		if (Pawn && Config.bCapturePawnState)
 		{
 			Row.PawnLocation = Pawn->GetActorLocation();
 			Row.PawnRotation = Pawn->GetActorRotation();

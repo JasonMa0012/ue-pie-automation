@@ -195,7 +195,7 @@ namespace
 			Params->TryGetNumberField(TEXT("capture_frame_every"), D);
 			Cfg.CaptureFrameEvery = FMath::Max(0, static_cast<int32>(D));
 		}
-		Cfg.CaptureFPS = FMath::Clamp(OptionalInt(Params, TEXT("capture_fps"), 5), 0, 240);
+		Cfg.CaptureFPS = FMath::Clamp(OptionalInt(Params, TEXT("capture_fps"), 10), 0, 240);
 		Cfg.CaptureResolutionPercent = FMath::Clamp(
 			OptionalInt(Params, TEXT("capture_resolution_percent"), 50), 1, 100);
 

@@ -12,6 +12,9 @@
 #include "Misc/FileHelper.h"
 #include "HAL/FileManager.h"
 #include "PIE/PIEInputRecorder.h"
+#include "PIE/PIEFrameSampler.h"
+#include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
 #include "PIE/PIESequenceFormat.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -260,5 +263,31 @@ bool FPIERawInputDispatchTest::RunTest(const FString& /*Parameters*/)
 	return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPIESamplerWithoutPawnTest,
+	"UE_PIE_Automation.RawInput.SamplerWithoutPawn",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FPIESamplerWithoutPawnTest::RunTest(const FString& /*Parameters*/)
+{
+	using namespace UE_PIE_Automation;
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	if (!TestNotNull(TEXT("test world"), World)) return false;
+	APlayerController* Controller = World->SpawnActor<APlayerController>();
+	if (TestNotNull(TEXT("player controller"), Controller))
+	{
+		World->AddController(Controller);
+		TestNull(TEXT("controller has no pawn"), Controller->GetPawn());
+		FPIEFrameSampler Sampler;
+		TestTrue(TEXT("raw recording sampler attaches without a pawn"), Sampler.AttachToPIE(World));
+		Sampler.QueueMarker(TEXT("without-pawn"));
+		const FCSVRow Row = Sampler.SampleFrame(World, 1, 0.1, 0.1);
+		TestTrue(TEXT("markers are sampled without a pawn"), Row.EdgeEvents.Contains(TEXT("mark:without-pawn")));
+		Sampler.Reset();
+	}
+	World->DestroyWorld(false);
+	return true;
+}
 
 #endif // WITH_DEV_AUTOMATION_TESTS

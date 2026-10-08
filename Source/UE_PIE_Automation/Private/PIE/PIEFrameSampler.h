@@ -24,7 +24,7 @@ class UWorld;
  * Lifecycle (per session):
  *   1. SetConfig(actions whitelist, tracked paths, axis_threshold)
  *   2. AttachToPIE(world) — discover actions, capture pawn class. Returns
- *      false until the pawn and its EnhancedInputComponent exist.
+ *      false until the player controller exists; pawn sampling is optional.
  *   3. SampleFrame(...) once per end-of-frame.
  *   4. Reset() between sessions.
  */
@@ -55,8 +55,8 @@ namespace UE_PIE_Automation
 		void SetConfig(const FConfig& InConfig);
 		void Reset();
 
-		// Walk the PIE world's first player and bind to its pawn's
-		// EnhancedInputComponent. Returns true once attached; subsequent
+		// Attach to the configured player controller; discover pawn input
+		// bindings when available. Returns true once attached; subsequent
 		// calls are no-ops. Safe to call every frame until it succeeds.
 		bool AttachToPIE(UWorld* PIEWorld);
 		bool IsAttached() const { return bAttached; }
