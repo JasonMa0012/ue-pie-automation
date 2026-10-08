@@ -24,6 +24,7 @@
 #include "Styling/AppStyle.h"
 #include "Styling/SlateStyleRegistry.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Interfaces/IPluginManager.h"
 #include "Misc/Paths.h"
 #include "Misc/FileHelper.h"
 #include "Misc/MessageDialog.h"
@@ -49,8 +50,7 @@ static void RegisterUE_PIE_AutomationStyle()
 {
 	if (UE_PIE_AutomationStyleSet.IsValid()) return;
 
-	FString ResourcesDir = FPaths::Combine(
-		FPaths::ProjectPluginsDir(), TEXT("UE_PIE_Automation"), TEXT("Resources"));
+	const FString ResourcesDir = IPluginManager::Get().FindPlugin(TEXT("UE_PIE_Automation"))->GetBaseDir() / TEXT("Resources");
 
 	UE_PIE_AutomationStyleSet = MakeShareable(new FSlateStyleSet("UE_PIE_AutomationStyle"));
 	UE_PIE_AutomationStyleSet->SetContentRoot(ResourcesDir);
