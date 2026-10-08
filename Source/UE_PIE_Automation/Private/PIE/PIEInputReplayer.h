@@ -46,8 +46,8 @@ namespace UE_PIE_Automation
 		// Legacy capture interval. 0 = off; used only when CaptureFPS is 0.
 		int32 CaptureFrameEvery = 0;
 		// Preferred capture rate; captures are written as PNG files.
-		int32 CaptureFPS = 10;
-		int32 CaptureResolutionPercent = 50;
+		int32 CaptureFPS = UE_PIE_Automation::DefaultCaptureFPS;
+		int32 CaptureResolutionPercent = UE_PIE_Automation::DefaultCaptureResolutionPercent;
 		// Multi-client PIE: which local player to drive injections / sample
 		// for drift. 0 = first (default), 1+ selects subsequent local players.
 		int32 ClientId = 0;

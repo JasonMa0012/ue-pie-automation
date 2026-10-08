@@ -195,9 +195,9 @@ namespace
 			Params->TryGetNumberField(TEXT("capture_frame_every"), D);
 			Cfg.CaptureFrameEvery = FMath::Max(0, static_cast<int32>(D));
 		}
-		Cfg.CaptureFPS = FMath::Clamp(OptionalInt(Params, TEXT("capture_fps"), 10), 0, 240);
+		Cfg.CaptureFPS = FMath::Clamp(OptionalInt(Params, TEXT("capture_fps"), DefaultCaptureFPS), 0, 240);
 		Cfg.CaptureResolutionPercent = FMath::Clamp(
-			OptionalInt(Params, TEXT("capture_resolution_percent"), 50), 1, 100);
+			OptionalInt(Params, TEXT("capture_resolution_percent"), DefaultCaptureResolutionPercent), 1, 100);
 
 		if (Params->HasField(TEXT("client_id")))
 		{

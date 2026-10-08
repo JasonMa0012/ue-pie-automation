@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "PIE/PIESequenceFormat.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/DeclarativeSyntaxSupport.h"
 
@@ -47,8 +48,8 @@ private:
 	// Recordings list
 	TSharedPtr<SVerticalBox> RecordingsListBox;
 	TArray<FString> CachedRecordingIds;
-	int32 CaptureFPS = 10;
-	int32 CaptureResolutionPercent = 50;
+	int32 CaptureFPS = UE_PIE_Automation::DefaultCaptureFPS;
+	int32 CaptureResolutionPercent = UE_PIE_Automation::DefaultCaptureResolutionPercent;
 
 	// Profiles list
 	TSharedPtr<SVerticalBox> ProfilesListBox;

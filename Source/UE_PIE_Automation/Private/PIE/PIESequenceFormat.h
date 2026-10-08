@@ -28,6 +28,9 @@ namespace UE_PIE_Automation
 {
 	constexpr int32 kFormatVersion = 3;
 
+	inline constexpr int32 DefaultCaptureFPS = 15;
+	inline constexpr int32 DefaultCaptureResolutionPercent = 50;
+
 	enum class EActionValueType : uint8
 	{
 		Boolean,
