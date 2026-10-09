@@ -15,6 +15,7 @@
 #include "PIE/PIEFrameSampler.h"
 #include "Engine/World.h"
 #include "Engine/Engine.h"
+#include "Editor.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerInput.h"
 #include "Components/InputComponent.h"
@@ -402,6 +403,33 @@ bool FPIERawInputConsumersTest::RunTest(const FString& /*Parameters*/)
 	PC->Player = nullptr;
 	LocalPlayer->PlayerController = nullptr;
 	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPIERecorderStopArmedTest,
+	"UE_PIE_Automation.RawInput.StopArmedRecorder",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FPIERecorderStopArmedTest::RunTest(const FString& /*Parameters*/)
+{
+	if (GEditor && GEditor->PlayWorld)
+	{
+		AddError(TEXT("StopArmedRecorder requires PIE to be stopped"));
+		return false;
+	}
+	UE_PIE_Automation::FPIEInputRecorder Recorder;
+	UE_PIE_Automation::FRecorderArmConfig Config;
+	FString Error, Message;
+	TestTrue(TEXT("arm"), Recorder.Arm(Config, Error, Message));
+	const auto Armed = Recorder.GetStatus();
+	const auto Result = Recorder.ForceStop();
+	TestTrue(TEXT("stop cancels armed recorder"), Result.bSuccess);
+	TestEqual(TEXT("returns cancelled ID"), Result.Id, Armed.Id);
+	TestFalse(TEXT("recorder inactive"), Recorder.IsActive());
+	TestTrue(TEXT("pending recording ID cleared"), Recorder.GetStatus().Id.IsEmpty());
+	TestFalse(TEXT("no recording directory created"), IFileManager::Get().DirectoryExists(*Armed.RecordingDir));
+	TestFalse(TEXT("idle stop reports not recording"), Recorder.ForceStop().bSuccess);
 	return true;
 }
 

@@ -28,7 +28,6 @@ void FUE_PIE_AutomationModule::StartupModule()
 	UE_PIE_Automation::FPIEObserver::Get().Init();
 	UE_PIE_Automation::FPIESessionLog::Get().Init();
 	SMCPPIEPanel::RegisterTab();
-	SMCPPIEPanel::RegisterToolbarButton();
 	NativeMCPRegistry = MakeUnique<FUE_PIE_AutomationMCPRegistry>();
 	NativeMCPRegistry->Register();
 
@@ -66,7 +65,6 @@ void FUE_PIE_AutomationModule::StartupModule()
 
 void FUE_PIE_AutomationModule::ShutdownModule()
 {
-	SMCPPIEPanel::UnregisterToolbarButton();
 	SMCPPIEPanel::UnregisterTab();
 
 	if (NativeMCPRegistry)

@@ -485,6 +485,14 @@ namespace UE_PIE_Automation
 
 	FRecorderFinishResult FPIEInputRecorder::ForceStop()
 	{
+		if (State == ERecorderState::Armed)
+		{
+			FRecorderFinishResult Result;
+			Result.Id = CurrentId;
+			Result.RecordingDir = CurrentDir;
+			Result.bSuccess = Disarm(Result.Error);
+			return Result;
+		}
 		return FinaliseCurrent();
 	}
 

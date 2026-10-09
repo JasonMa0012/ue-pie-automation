@@ -17,6 +17,7 @@
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "UObject/SavePackage.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/Images/SImage.h"
 #include "Framework/Docking/TabManager.h"
 #include "ToolMenus.h"
 #include "WorkspaceMenuStructure.h"
@@ -185,17 +186,19 @@ namespace
 
 void SMCPPIEPanel::RegisterTab()
 {
+	RegisterUE_PIE_AutomationStyle();
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(TabId,
 		FOnSpawnTab::CreateLambda([](const FSpawnTabArgs&) -> TSharedRef<SDockTab>
 		{
 			return SNew(SDockTab)
 				.TabRole(NomadTab)
-				.Label(FText::FromString(TEXT("UE PIE Automation")))
+				.Label(FText::FromString(TEXT("PIE Automation")))
 				[
 					SNew(SMCPPIEPanel)
 				];
 		}))
-		.SetDisplayName(FText::FromString(TEXT("UE PIE Automation")))
+		.SetDisplayName(FText::FromString(TEXT("PIE Automation")))
+		.SetIcon(FSlateIcon("UE_PIE_AutomationStyle", "UE_PIE_Automation.Record"))
 		.SetTooltipText(FText::FromString(TEXT("UE PIE Automation — Record / Replay / Observe")))
 		.SetGroup(WorkspaceMenu::GetMenuStructure().GetToolsCategory());
 }
@@ -203,14 +206,13 @@ void SMCPPIEPanel::RegisterTab()
 void SMCPPIEPanel::UnregisterTab()
 {
 	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(TabId);
+	UnregisterUE_PIE_AutomationStyle();
 }
 
 void SMCPPIEPanel::OpenTab()
 {
 	FGlobalTabmanager::Get()->TryInvokeTab(TabId);
 }
-
-TSharedPtr<FExtender> SMCPPIEPanel::ToolbarExtender;
 
 SMCPPIEPanel::~SMCPPIEPanel()
 {
@@ -219,148 +221,6 @@ SMCPPIEPanel::~SMCPPIEPanel()
 		FEditorDelegates::EndPIE.Remove(EndPIEHandle);
 		EndPIEHandle.Reset();
 	}
-}
-
-void SMCPPIEPanel::RegisterToolbarButton()
-{
-	RegisterUE_PIE_AutomationStyle();
-
-	UToolMenu* ToolBar = UToolMenus::Get()->ExtendMenu("LevelEditor.LevelEditorToolBar.PlayToolBar");
-	FToolMenuSection& Section = ToolBar->FindOrAddSection("UE_PIE_Automation");
-
-	Section.AddDynamicEntry("UE_PIE_AutomationActions", FNewToolMenuSectionDelegate::CreateLambda([](FToolMenuSection& InSection)
-	{
-		{
-			FToolMenuEntry Entry =
-				FToolMenuEntry::InitToolBarButton(
-					"Record",
-					FExecuteAction::CreateLambda([]()
-					{
-						UE_PIE_Automation::FRecorderArmConfig Cfg;
-						FString Err, Msg;
-						UE_PIE_Automation::FPIEInputRecorder::Get().Arm(Cfg, Err, Msg);
-					}),
-					FText::GetEmpty(),
-					FText::FromString(TEXT("Arm MCP recorder (waits for PIE start)")),
-					FSlateIcon("UE_PIE_AutomationStyle", "UE_PIE_Automation.Record"));
-			Entry.StyleNameOverride = FName("Toolbar.BackplateLeft");
-			InSection.AddEntry(Entry);
-		}
-
-		{
-			FToolMenuEntry Entry =
-				FToolMenuEntry::InitToolBarButton(
-					"RecordPlay",
-					FExecuteAction::CreateLambda([]()
-					{
-						UE_PIE_Automation::FRecorderArmConfig Cfg;
-						FString Err, Msg;
-						UE_PIE_Automation::FPIEInputRecorder::Get().Arm(Cfg, Err, Msg);
-						if (GEditor && !GEditor->PlayWorld)
-						{
-							FRequestPlaySessionParams P;
-							GEditor->RequestPlaySession(P);
-						}
-					}),
-					FText::GetEmpty(),
-					FText::FromString(TEXT("Arm MCP recorder and start PIE")),
-					FSlateIcon("UE_PIE_AutomationStyle", "UE_PIE_Automation.RecordPlay"));
-			Entry.StyleNameOverride = FName("Toolbar.BackplateCenter");
-			InSection.AddEntry(Entry);
-		}
-
-		{
-			FToolMenuEntry ComboEntry =
-				FToolMenuEntry::InitComboButton(
-					"UE_PIE_AutomationMenu",
-					FUIAction(),
-					FNewMenuDelegate::CreateLambda([](FMenuBuilder& Menu)
-					{
-						Menu.BeginSection("Recording", FText::FromString(TEXT("Recording")));
-
-						Menu.AddMenuEntry(
-							FText::FromString(TEXT("Record + Play")),
-							FText::FromString(TEXT("Arm MCP recorder and start PIE")),
-							FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Recording"),
-							FUIAction(FExecuteAction::CreateLambda([]()
-							{
-								UE_PIE_Automation::FRecorderArmConfig Cfg;
-								FString Err, Msg;
-								UE_PIE_Automation::FPIEInputRecorder::Get().Arm(Cfg, Err, Msg);
-								if (GEditor && !GEditor->PlayWorld)
-								{
-									FRequestPlaySessionParams P;
-									GEditor->RequestPlaySession(P);
-								}
-							}))
-						);
-
-						Menu.AddMenuEntry(
-							FText::FromString(TEXT("Arm Recorder")),
-							FText::FromString(TEXT("Arm MCP recorder (waits for PIE start)")),
-							FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Recording"),
-							FUIAction(FExecuteAction::CreateLambda([]()
-							{
-								UE_PIE_Automation::FRecorderArmConfig Cfg;
-								FString Err, Msg;
-								UE_PIE_Automation::FPIEInputRecorder::Get().Arm(Cfg, Err, Msg);
-							}))
-						);
-
-						const auto RecState = UE_PIE_Automation::FPIEInputRecorder::Get().GetStatus().State;
-
-						if (RecState == UE_PIE_Automation::ERecorderState::Armed || RecState == UE_PIE_Automation::ERecorderState::WaitingForPawn)
-						{
-							Menu.AddMenuEntry(
-								FText::FromString(TEXT("Disarm Recorder")),
-								FText::FromString(TEXT("Disarm MCP recorder")),
-								FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.X"),
-								FUIAction(FExecuteAction::CreateLambda([]()
-								{
-									FString Err;
-									UE_PIE_Automation::FPIEInputRecorder::Get().Disarm(Err);
-								}))
-							);
-						}
-
-						if (RecState == UE_PIE_Automation::ERecorderState::Recording)
-						{
-							Menu.AddMenuEntry(
-								FText::FromString(TEXT("Stop Recording")),
-								FText::FromString(TEXT("Force stop MCP recording")),
-								FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Delete"),
-								FUIAction(FExecuteAction::CreateLambda([]()
-								{
-									UE_PIE_Automation::FPIEInputRecorder::Get().ForceStop();
-								}))
-							);
-						}
-
-						Menu.EndSection();
-
-						Menu.BeginSection("Panel", FText::FromString(TEXT("Panel")));
-						Menu.AddMenuEntry(
-							FText::FromString(TEXT("Open UE PIE Automation Panel")),
-							FText::FromString(TEXT("Open the full UE PIE Automation control panel")),
-							FSlateIcon(),
-							FUIAction(FExecuteAction::CreateLambda([]()
-							{
-								SMCPPIEPanel::OpenTab();
-							}))
-						);
-						Menu.EndSection();
-					}),
-					FText::GetEmpty(),
-					FText::FromString(TEXT("UE PIE Automation Options")));
-			ComboEntry.StyleNameOverride = FName("Toolbar.BackplateRightCombo");
-			InSection.AddEntry(ComboEntry);
-		}
-	}));
-}
-
-void SMCPPIEPanel::UnregisterToolbarButton()
-{
-	UnregisterUE_PIE_AutomationStyle();
 }
 
 void SMCPPIEPanel::Construct(const FArguments& InArgs)
@@ -405,7 +265,7 @@ void SMCPPIEPanel::Construct(const FArguments& InArgs)
 
 void SMCPPIEPanel::OnEndPIE(bool bIsSimulating)
 {
-	RefreshRecordings();
+	bRecordingsRefreshPending = true;
 	RefreshProfiles();
 }
 
@@ -472,97 +332,105 @@ void SMCPPIEPanel::RenameRecording(const FString& RecordingId)
 
 TSharedRef<SWidget> SMCPPIEPanel::BuildRecorderSection()
 {
-	return SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight()
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 4, 0)
 		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			SNew(SButton)
+			.OnClicked_Lambda([]()
+			{
+				UE_PIE_Automation::FRecorderArmConfig Cfg;
+				FString Err, Msg;
+				UE_PIE_Automation::FPIEInputRecorder::Get().Arm(Cfg, Err, Msg);
+				if (GEditor && !GEditor->PlayWorld)
+				{
+					FRequestPlaySessionParams P; GEditor->RequestPlaySession(P);
+				}
+				return FReply::Handled();
+			})
 			[
-				SNew(STextBlock)
-				.Font(FAppStyle::GetFontStyle("BoldFont"))
-				.Text(FText::FromString(TEXT("Recorder")))
-			]
-			+ SHorizontalBox::Slot().FillWidth(1.f)
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4, 0, 2, 0)
-			[
-				SNew(STextBlock).Text(FText::FromString(TEXT("Time Scale")))
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(2, 0, 2, 0)
-			[
-				SNew(SSpinBox<float>)
-				.MinValue(1.0f)
-				.MaxValue(400.0f)
-				.Delta(1.0f)
-				.MinFractionalDigits(0)
-				.MaxFractionalDigits(2)
-				.Value_Lambda([this]() { return CurrentTimeScale * 100.0f; })
-				.OnValueChanged_Lambda([this](float Value) { ApplyTimeScale(Value / 100.0f); })
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
-			[
-				SNew(STextBlock).Text(FText::FromString(TEXT("%")))
-			]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(4, 0)
-			[
-				SAssignNew(RecorderStateText, STextBlock)
-				.Text(FText::FromString(TEXT("Idle")))
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[ SNew(SImage).Image(UE_PIE_AutomationStyleSet->GetBrush("UE_PIE_Automation.RecordPlay")).DesiredSizeOverride(FVector2D(16, 16)) ]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4, 0, 0, 0)
+				[ SNew(STextBlock).Text(FText::FromString(TEXT("Record + Play"))) ]
 			]
 		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 4)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 4, 0)
 		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
+			SNew(SButton)
+			.OnClicked_Lambda([]()
+			{
+				UE_PIE_Automation::FRecorderArmConfig Cfg;
+				FString Err, Msg;
+				UE_PIE_Automation::FPIEInputRecorder::Get().Arm(Cfg, Err, Msg);
+				return FReply::Handled();
+			})
 			[
-				SNew(SButton)
-				.Text(FText::FromString(TEXT("Record + Play")))
-				.OnClicked_Lambda([]()
-				{
-					UE_PIE_Automation::FRecorderArmConfig Cfg;
-					FString Err, Msg;
-					UE_PIE_Automation::FPIEInputRecorder::Get().Arm(Cfg, Err, Msg);
-					if (GEditor && !GEditor->PlayWorld)
-					{
-						FRequestPlaySessionParams P; GEditor->RequestPlaySession(P);
-					}
-					return FReply::Handled();
-				})
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[ SNew(SImage).Image(UE_PIE_AutomationStyleSet->GetBrush("UE_PIE_Automation.Record")).DesiredSizeOverride(FVector2D(16, 16)) ]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4, 0, 0, 0)
+				[ SNew(STextBlock).Text(FText::FromString(TEXT("Arm"))) ]
 			]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			SNew(SButton)
+			.IsEnabled_Lambda([]() { return UE_PIE_Automation::FPIEInputRecorder::Get().IsActive(); })
+			.OnClicked_Lambda([this]()
+			{
+				UE_PIE_Automation::FPIEInputRecorder::Get().ForceStop();
+				bRecordingsRefreshPending = true;
+				return FReply::Handled();
+			})
 			[
-				SNew(SButton)
-				.Text(FText::FromString(TEXT("Arm")))
-				.OnClicked_Lambda([]()
-				{
-					UE_PIE_Automation::FRecorderArmConfig Cfg;
-					FString Err, Msg;
-					UE_PIE_Automation::FPIEInputRecorder::Get().Arm(Cfg, Err, Msg);
-					return FReply::Handled();
-				})
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[ SNew(SImage).Image(FAppStyle::Get().GetBrush("PlayWorld.StopPlaySession.Small")).DesiredSizeOverride(FVector2D(16, 16)) ]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4, 0, 0, 0)
+				[ SNew(STextBlock).Text(FText::FromString(TEXT("Stop"))) ]
 			]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
+		]
+		+ SHorizontalBox::Slot().FillWidth(1.f)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4, 0, 2, 0)
+		[
+			SNew(STextBlock).Text(FText::FromString(TEXT("Time Scale")))
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(2, 0, 2, 0)
+		[
+			SNew(SSpinBox<float>)
+			.MinValue(1.0f)
+			.MaxValue(400.0f)
+			.Delta(1.0f)
+			.MinFractionalDigits(0)
+			.MaxFractionalDigits(2)
+			.Value_Lambda([this]() { return CurrentTimeScale * 100.0f; })
+			.OnValueChanged_Lambda([this](float Value) { ApplyTimeScale(Value / 100.0f); })
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+		[
+			SNew(STextBlock).Text(FText::FromString(TEXT("%")))
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4, 0)
+		[
+			SAssignNew(RecorderStateText, STextBlock)
+			.Text(FText::FromString(TEXT("Idle")))
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4, 0, 0, 0)
+		[
+			SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+			.ToolTipText(FText::FromString(TEXT("Help: open the PIE Automation project page")))
+			.OnClicked_Lambda([]()
+			{
+				FPlatformProcess::LaunchURL(TEXT("https://github.com/JasonMa0012/ue-pie-automation"), nullptr, nullptr);
+				return FReply::Handled();
+			})
 			[
-				SNew(SButton)
-				.Text(FText::FromString(TEXT("Disarm")))
-				.OnClicked_Lambda([]()
-				{
-					FString Err;
-					UE_PIE_Automation::FPIEInputRecorder::Get().Disarm(Err);
-					return FReply::Handled();
-				})
-			]
-			+ SHorizontalBox::Slot().AutoWidth()
-			[
-				SNew(SButton)
-				.Text(FText::FromString(TEXT("Stop")))
-				.OnClicked_Lambda([]()
-				{
-					UE_PIE_Automation::FPIEInputRecorder::Get().ForceStop();
-					return FReply::Handled();
-				})
+				SNew(SImage).Image(FAppStyle::GetBrush("Icons.Help"))
 			]
 		];
 }
-
 
 void SMCPPIEPanel::ApplyTimeScale(float Scale)
 {
@@ -698,6 +566,14 @@ void SMCPPIEPanel::Tick(const FGeometry& AllottedGeometry, const double InCurren
 	// Update state labels
 	{
 		const auto RS = UE_PIE_Automation::FPIEInputRecorder::Get().GetStatus();
+		const bool bRecorderActive = RS.State != UE_PIE_Automation::ERecorderState::Idle;
+		if (bRecorderWasActive && !bRecorderActive) bRecordingsRefreshPending = true;
+		bRecorderWasActive = bRecorderActive;
+		if (bRecordingsRefreshPending)
+		{
+			bRecordingsRefreshPending = false;
+			RefreshRecordings();
+		}
 		const FString RecText = FString::Printf(TEXT("%s  %s  F:%d  %.1fs"),
 			*RecorderStateStr(RS.State), *RS.Id, RS.CurrentFrame, RS.ElapsedSeconds);
 		const bool bRecActive = RS.State == UE_PIE_Automation::ERecorderState::Recording;
@@ -837,11 +713,12 @@ void SMCPPIEPanel::RefreshRecordings()
 					SNew(SButton)
 					.Text(FText::FromString(TEXT("Save as Reference")))
 					.ToolTipText(FText::FromString(TEXT("Replace ref_frames with the current PNG frames")))
-					.OnClicked_Lambda([Id]()
+					.OnClicked_Lambda([this, Id]()
 					{
 						TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
 						Params->SetStringField(TEXT("recording_id"), Id);
 						FGameplayHandlers::PieReferenceSave(Params);
+						bRecordingsRefreshPending = true;
 						return FReply::Handled();
 					})
 				]

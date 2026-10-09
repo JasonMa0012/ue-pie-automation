@@ -203,8 +203,8 @@ namespace UE_PIE_Automation
 		bool Arm(const FRecorderArmConfig& Cfg, FString& OutError, FString& OutMessage);
 		bool Disarm(FString& OutError);
 
-		// Force-finalise the in-flight recording even if EndPIE has not
-		// fired. Returns the same shape EndPIE would have produced.
+		// Cancel an armed recorder, or finalise the in-flight recording
+		// even if EndPIE has not fired.
 		FRecorderFinishResult ForceStop();
 
 		// Insert a marker into the current frame's edge events. Returns

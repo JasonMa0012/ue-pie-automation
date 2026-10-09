@@ -5,8 +5,6 @@
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/DeclarativeSyntaxSupport.h"
 
-class FExtender;
-
 class SMCPPIEPanel : public SCompoundWidget
 {
 public:
@@ -19,13 +17,8 @@ public:
 	static void RegisterTab();
 	static void UnregisterTab();
 	static void OpenTab();
-	static void RegisterToolbarButton();
-	static void UnregisterToolbarButton();
 
 	static const FName TabId;
-
-private:
-	static TSharedPtr<FExtender> ToolbarExtender;
 
 private:
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
@@ -48,6 +41,8 @@ private:
 	// Recordings list
 	TSharedPtr<SVerticalBox> RecordingsListBox;
 	TArray<FString> CachedRecordingIds;
+	bool bRecordingsRefreshPending = false;
+	bool bRecorderWasActive = false;
 	int32 CaptureFPS = UE_PIE_Automation::DefaultCaptureFPS;
 	int32 CaptureResolutionPercent = UE_PIE_Automation::DefaultCaptureResolutionPercent;
 
