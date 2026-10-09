@@ -58,7 +58,7 @@ UE 原生 MCP 负责 HTTP、MCP 握手、工具发现和工具调用。插件只
 
 ### 录制
 
-`PIEStudio.record_arm` 调用 `FPIEInputRecorder::Arm`，状态依次为 `Armed → WaitingForPawn → Recording`。采样器绑定 Pawn 后，在帧回调中采集 Enhanced Input、Pawn/动画状态、跟踪属性和性能数据。`record_stop` 或 `EndPIE` 写入：
+`PIEStudio.record_arm` 调用 `FPIEInputRecorder::Arm`，状态依次为 `Armed → WaitingForPawn → Recording`。采样器绑定 PlayerController（不要求 Pawn）后，录制器通过 Slate 保存原始键鼠事件，并采集 Enhanced Input、可用的 Pawn/动画状态、跟踪属性和性能数据。`record_stop` 或 `EndPIE` 写入：
 
 ```text
 Saved/MCPRecordings/<id>/
@@ -69,7 +69,9 @@ Saved/MCPRecordings/<id>/
 
 ### 回放
 
-`replay_arm` 只准备输入序列；`replay_run` 还会请求编辑器启动 PIE。回放器等待 Pawn 和稳定时间，按帧重新注入输入并对比源数据，最终写入 `drift.json`。`replay_status` 是异步流程的状态入口，只有 `pie_active=false` 且 `last_result` 已出现时才代表本次运行结束。
+`replay_arm` 只准备输入序列；`replay_run` 还会请求编辑器启动 PIE。回放器等待本地 PlayerController、视口和稳定时间，每次游戏输入处理只回放一组录制帧，再对比源数据并写入 `drift.json`。原始键鼠事件经 Slate 和游戏视口进入 PlayerInput，兼容 Enhanced Input 与传统绑定，包括普通 Actor 上的输入组件。`replay_status` 是异步流程的状态入口，只有 `pie_active=false` 且 `last_result` 已出现时才代表本次运行结束。
+
+录制格式为 v4，旧格式直接报错并要求重新录制。`sequence.json` 保存输入处理帧、持续累加的会话游戏时间和关卡边界。切图后重新绑定 World、Controller 与视口，加载期间不推进时间；回放等待对应地图及首次游戏 Tick 就绪，等待超过 30 秒时报错。游戏相对鼠标位移保留原始像素值，UI 指针位置按当前视口缩放。
 
 输入回放提升可重复性，但不保证 Chaos、动画、网络和项目逻辑完全确定。`replay_state` 是另一条路径：它直接读取并可应用已记录的 Pawn 状态，不重新模拟完整游戏逻辑。
 

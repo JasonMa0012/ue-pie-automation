@@ -435,7 +435,6 @@ namespace UE_PIE_Automation
 		Sampler.SetConfig(SC);
 
 		State = EReplayerState::WaitingForPawn;
-		AttachTime = 0.0;
 		StartedAt = ISOTimestampNow();
 
 		if (!bEndFrameBound)
@@ -531,6 +530,14 @@ namespace UE_PIE_Automation
 			return;
 		}
 		if (State == EReplayerState::Idle) return;
+		if (State == EReplayerState::Replaying && !FPIEInputRouter::Get().GetLastError().IsEmpty())
+		{
+			InputError = FPIEInputRouter::Get().GetLastError();
+			UE_LOG(LogUE_PIE_Automation, Error, TEXT("[PIE-REP] Raw input replay failed: %s"), *InputError);
+			ForceStop();
+			if (Pending.bAutoStopPIE && GEditor) GEditor->RequestEndPlayMap();
+			return;
+		}
 		if (State == EReplayerState::Completed)
 		{
 			if (ViewportCapture.IsValid())
@@ -617,11 +624,11 @@ namespace UE_PIE_Automation
 					}
 				}
 
-				if (!Pending.bMonitor && !FPIEInputRouter::Get().BeginReplay(ActiveSequence, InputError))
+				const double SettleSeconds = FMath::Max(0, Pending.SettleMs >= 0 ? Pending.SettleMs : ActiveSequence.SettleMs) / 1000.0;
+				if (!FPIEInputRouter::Get().BeginReplay(ActiveSequence, Pending.ClientId, SettleSeconds, Pending.bMonitor, InputError))
 				{
 					UE_LOG(LogUE_PIE_Automation, Error, TEXT("[PIE-REP] Raw input replay failed: %s"), *InputError);
 				}
-				AttachTime = PIEWorld->GetTimeSeconds();
 				State = EReplayerState::Replaying;
 				SourceFrameCursor = 0;
 			}
@@ -630,36 +637,17 @@ namespace UE_PIE_Automation
 
 		if (State == EReplayerState::Replaying)
 		{
-			const double Now = PIEWorld->GetTimeSeconds();
-			// Input events, auxiliary steps, drift and captures share this replay clock.
-			const int32 Settle = (Pending.SettleMs >= 0) ? Pending.SettleMs : ActiveSequence.SettleMs;
-			const double ElapsedMs = (Now - AttachTime) * 1000.0;
-			if (ElapsedMs < Settle)
-			{
-				return;
-			}
-
-			const double TimelineElapsedMs = FMath::Max(0.0, ElapsedMs - Settle);
-			const double SourceTimelineDurationMs = SourceFrames.Num() > 1
-				? FMath::Max(0.0, (SourceFrames.Last().Time - SourceFrames[0].Time) * 1000.0)
-				: 0.0;
-			const bool bSourceTimelineDone = SourceFrames.Num() == 0
-				|| TimelineElapsedMs + 0.001 >= SourceTimelineDurationMs;
-			const uint64 ReplayFrame = ReplayFrameCounter++;
-			FindSourceFrameForTimeline(TimelineElapsedMs);
+			if (!Sampler.AttachToPIE(PIEWorld)) return;
+			const double TimelineElapsedMs = FPIEInputRouter::Get().GetElapsedSeconds() * 1000.0;
+			const int32 InputFrame = FPIEInputRouter::Get().GetReplayFrame();
+			if (InputFrame == 0 || static_cast<uint64>(InputFrame) == ReplayFrameCounter) return;
+			ReplayFrameCounter = InputFrame;
+			const bool bSourceTimelineDone = FPIEInputRouter::Get().IsReplayComplete();
+			const uint64 ReplayFrame = SourceFrames.IsEmpty() ? InputFrame - 1 : FindSourceFrameForTimeline(TimelineElapsedMs);
 			if (!Pending.bMonitor)
 			{
-				if (InputError.IsEmpty())
-				{
-					FString DispatchError;
-					if (!FPIEInputRouter::Get().DispatchDue(TimelineElapsedMs, DispatchError))
-					{
-						InputError = DispatchError;
-						UE_LOG(LogUE_PIE_Automation, Error, TEXT("[PIE-REP] Raw input dispatch failed: %s"), *InputError);
-					}
-				}
 				InputEventsExecuted = FPIEInputRouter::Get().GetExecutedEventCount();
-				ExecutePendingSteps(TimelineElapsedMs);
+				ExecutePendingSteps(TimelineElapsedMs + (bSourceTimelineDone ? 0.5 : 0.0));
 			}
 
 			// Viewport capture is scheduled from the replay timeline. CaptureFPS is
@@ -729,7 +717,7 @@ namespace UE_PIE_Automation
 			{
 				if (ReplayFrame < static_cast<uint64>(SourceFrames.Num()))
 				{
-					FCSVRow Row = Sampler.SampleFrame(PIEWorld, ReplayFrame, Now, PIEWorld->GetDeltaSeconds());
+					FCSVRow Row = Sampler.SampleFrame(PIEWorld, ReplayFrame, TimelineElapsedMs / 1000.0, PIEWorld->GetDeltaSeconds());
 					const FSourceFrame& Src = SourceFrames[static_cast<int32>(ReplayFrame)];
 					FDriftFrameEntry E;
 					E.Frame = ReplayFrame;
@@ -890,11 +878,8 @@ namespace UE_PIE_Automation
 				if (bSourceTimelineDone)
 				{
 					State = EReplayerState::Completed;
-					if (!Pending.bMonitor)
-					{
-						InputEventsExecuted = FPIEInputRouter::Get().EndReplay();
-						if (InputError.IsEmpty()) InputError = FPIEInputRouter::Get().GetLastError();
-					}
+					InputEventsExecuted = FPIEInputRouter::Get().EndReplay();
+					if (InputError.IsEmpty()) InputError = FPIEInputRouter::Get().GetLastError();
 				}
 			}
 		}
@@ -915,11 +900,8 @@ namespace UE_PIE_Automation
 			return R;
 		}
 
-		if (!Pending.bMonitor)
-		{
-			InputEventsExecuted = FPIEInputRouter::Get().EndReplay();
-			if (InputError.IsEmpty()) InputError = FPIEInputRouter::Get().GetLastError();
-		}
+		InputEventsExecuted = FPIEInputRouter::Get().EndReplay();
+		if (InputError.IsEmpty()) InputError = FPIEInputRouter::Get().GetLastError();
 
 		R.bSuccess = true;
 		R.ExecutedSteps = ExecutedSteps;
@@ -1090,9 +1072,9 @@ namespace UE_PIE_Automation
 		S.CurrentStep = NextStepIndex;
 		S.TotalSteps = ActiveSequence.Steps.Num();
 		S.ElapsedSeconds = 0.0;
-		if (GEditor && GEditor->PlayWorld && AttachTime > 0.0)
+		if (State == EReplayerState::Replaying || State == EReplayerState::Completed)
 		{
-			S.ElapsedSeconds = GEditor->PlayWorld->GetTimeSeconds() - AttachTime;
+			S.ElapsedSeconds = FPIEInputRouter::Get().GetElapsedSeconds();
 		}
 		S.MaxPositionDriftCm = MaxPosDriftCm;
 		S.MaxVelocityDriftCms = MaxVelDriftCms;
@@ -1142,9 +1124,9 @@ namespace UE_PIE_Automation
 		S.MaxRotationDriftDeg = MaxRotDriftDeg;
 		S.MontageMismatches = MontageMismatches;
 		S.MaxTrackedDeltas = MaxTrackedDeltas;
-		if (GEditor && GEditor->PlayWorld && AttachTime > 0.0)
+		if (State == EReplayerState::Replaying || State == EReplayerState::Completed)
 		{
-			S.ElapsedSeconds = GEditor->PlayWorld->GetTimeSeconds() - AttachTime;
+			S.ElapsedSeconds = FPIEInputRouter::Get().GetElapsedSeconds();
 		}
 		return S;
 	}

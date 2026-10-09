@@ -26,7 +26,7 @@ class AActor;
  */
 namespace UE_PIE_Automation
 {
-	constexpr int32 kFormatVersion = 3;
+	constexpr int32 kFormatVersion = 4;
 
 	inline constexpr int32 DefaultCaptureFPS = 15;
 	inline constexpr int32 DefaultCaptureResolutionPercent = 50;
@@ -141,6 +141,8 @@ namespace UE_PIE_Automation
 		EPIEInputEventType Type = EPIEInputEventType::MouseMove;
 		double TimeSeconds = 0.0;
 		int32 Order = 0;
+		int32 InputFrame = 0;
+		FString Map;
 		FString Key;
 		TArray<FString> PressedButtons;
 		FVector2D Position = FVector2D::ZeroVector;
@@ -150,11 +152,18 @@ namespace UE_PIE_Automation
 		uint32 PointerIndex = 0;
 		uint32 KeyCode = 0;
 		bool bIsRepeat = false;
+		bool bRelativeMouse = false;
 		bool bShift = false;
 		bool bControl = false;
 		bool bAlt = false;
 		bool bCommand = false;
 		bool bCapsLocked = false;
+	};
+
+	struct FPIEWorldSegment
+	{
+		int32 InputFrame = 0;
+		FString Map;
 	};
 
 	struct FSequence
@@ -166,6 +175,9 @@ namespace UE_PIE_Automation
 		int64 RngSeed = 0;
 		FVector2D ViewportSize = FVector2D::ZeroVector;
 		TArray<FPIEInputEvent> InputEvents;
+		// End time of each input-processing frame on the session game clock.
+		TArray<double> InputFrameTimes;
+		TArray<FPIEWorldSegment> WorldSegments;
 		TArray<FStep> Steps;
 	};
 

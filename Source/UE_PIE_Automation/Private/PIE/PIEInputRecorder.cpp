@@ -9,6 +9,9 @@
 #include "EngineUtils.h"
 #include "GenericPlatform/GenericWindow.h"
 #include "GameFramework/Actor.h"
+#include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
+#include "HAL/PlatformTime.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
 #include "Misc/CoreDelegates.h"
@@ -19,6 +22,7 @@
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
 #include "Layout/Geometry.h"
+#include "Layout/WidgetPath.h"
 #include "Slate/SceneViewport.h"
 #include "Widgets/SViewport.h"
 #include "Widgets/SWindow.h"
@@ -105,8 +109,7 @@ namespace UE_PIE_Automation
 		}
 
 		Pending = Cfg;
-		InputEvents.Reset();
-		RecordedViewportSize = FVector2D::ZeroVector;
+		RecordedSequence = FSequence();
 		bRawInputStarted = false;
 		InputError.Reset();
 		if (!Pending.bUserSuppliedSeed || Pending.RngSeed == 0)
@@ -164,11 +167,9 @@ namespace UE_PIE_Automation
 			Rows.Reset();
 			ActorRows.Reset();
 			Markers.Reset();
-			InputEvents.Reset();
-			RecordedViewportSize = FVector2D::ZeroVector;
-			bRawInputStarted = false;
+			RecordedSequence = FSequence();
+				bRawInputStarted = false;
 			InputError.Reset();
-		StartTime = FPlatformTime::Seconds();
 		StartedAt = ISOTimestampNow();
 
 		State = ERecorderState::WaitingForPawn;
@@ -233,17 +234,19 @@ namespace UE_PIE_Automation
 
 			if (State == ERecorderState::Recording)
 			{
-				const double GameTime = PIEWorld->GetTimeSeconds();
 				const double Dt = PIEWorld->GetDeltaSeconds();
 				const uint64 FrameNum = static_cast<uint64>(Rows.Num());
 				if (!bRawInputStarted && InputError.IsEmpty())
 				{
-					bRawInputStarted = FPIEInputRouter::Get().BeginRecording(PIEWorld, GameTime, InputError);
+					bRawInputStarted = FPIEInputRouter::Get().BeginRecording(PIEWorld, Pending.ClientId, InputError);
 					if (!InputError.IsEmpty())
 					{
 						UE_LOG(LogUE_PIE_Automation, Error, TEXT("[PIE-REC] Raw input capture failed: %s"), *InputError);
 					}
 				}
+				if (!Sampler.AttachToPIE(PIEWorld)) return;
+				const double GameTime = FPIEInputRouter::Get().GetElapsedSeconds();
+				if (!Rows.IsEmpty() && GameTime <= Rows.Last().Time) return;
 				FCSVRow Row = Sampler.SampleFrame(PIEWorld, FrameNum, GameTime, Dt);
 
 			// Lift mark:* edge events into the manifest markers list.
@@ -304,8 +307,8 @@ namespace UE_PIE_Automation
 		const bool bHadData = Rows.Num() > 0 && Sampler.IsAttached();
 		R.Id = CurrentId;
 		R.RecordingDir = CurrentDir;
-		FPIEInputRouter::Get().EndRecording(InputEvents, RecordedViewportSize);
-		R.RawInputEventCount = InputEvents.Num();
+		FPIEInputRouter::Get().EndRecording(RecordedSequence);
+		R.RawInputEventCount = RecordedSequence.InputEvents.Num();
 		R.InputError = InputError;
 		if (!InputError.IsEmpty())
 		{
@@ -323,9 +326,8 @@ namespace UE_PIE_Automation
 			ActorRows.Reset();
 			TrackedActorCache.Reset();
 			Markers.Reset();
-			InputEvents.Reset();
-			RecordedViewportSize = FVector2D::ZeroVector;
-			bRawInputStarted = false;
+			RecordedSequence = FSequence();
+				bRawInputStarted = false;
 			InputError.Reset();
 			return R;
 		}
@@ -352,9 +354,8 @@ namespace UE_PIE_Automation
 			ActorRows.Reset();
 			TrackedActorCache.Reset();
 			Markers.Reset();
-			InputEvents.Reset();
-			RecordedViewportSize = FVector2D::ZeroVector;
-			bRawInputStarted = false;
+			RecordedSequence = FSequence();
+				bRawInputStarted = false;
 			return R;
 		}
 
@@ -373,14 +374,12 @@ namespace UE_PIE_Automation
 			return R;
 		}
 
-		FSequence Seq;
+		FSequence Seq = MoveTemp(RecordedSequence);
 		Seq.Version = kFormatVersion;
 		Seq.SourceRecordingId = CurrentId;
 		Seq.SettleMs = 500;
 		Seq.SampleHz = Pending.SampleHz;
 		Seq.RngSeed = Pending.RngSeed;
-		Seq.ViewportSize = RecordedViewportSize;
-		Seq.InputEvents = InputEvents;
 		const double BaseTime = Rows[0].Time;
 		for (const FMarker& Marker : Markers)
 		{
@@ -478,8 +477,7 @@ namespace UE_PIE_Automation
 		ActorRows.Reset();
 		TrackedActorCache.Reset();
 		Markers.Reset();
-		InputEvents.Reset();
-		RecordedViewportSize = FVector2D::ZeroVector;
+		RecordedSequence = FSequence();
 		bRawInputStarted = false;
 		InputError.Reset();
 		return R;
@@ -519,18 +517,12 @@ namespace UE_PIE_Automation
 		return *Instance;
 	}
 
-	const FPIEInputEvent* FPIEInputRouter::TakeNextDueEvent(const TArray<FPIEInputEvent>& Events, int32& Cursor, double ElapsedMs)
-	{
-		if (!Events.IsValidIndex(Cursor) || Events[Cursor].TimeSeconds * 1000.0 > ElapsedMs) return nullptr;
-		return &Events[Cursor];
-	}
-
-	bool FPIEInputRouter::DispatchDueEvents(const TArray<FPIEInputEvent>& Events, int32& Cursor, double ElapsedMs,
+	bool FPIEInputRouter::DispatchFrameEvents(const TArray<FPIEInputEvent>& Events, int32& Cursor, int32 InputFrame, const FString& Map,
 		TFunctionRef<bool(const FPIEInputEvent&, FString&)> DispatchEvent, FString& OutError)
 	{
-		while (const FPIEInputEvent* Event = TakeNextDueEvent(Events, Cursor, ElapsedMs))
+		while (Events.IsValidIndex(Cursor) && Events[Cursor].InputFrame == InputFrame && Events[Cursor].Map == Map)
 		{
-			if (!DispatchEvent(*Event, OutError)) return false;
+			if (!DispatchEvent(Events[Cursor], OutError)) return false;
 			++Cursor;
 		}
 		return true;
@@ -583,9 +575,8 @@ namespace UE_PIE_Automation
 
 	void FPIEInputRouter::Shutdown()
 	{
-		TArray<FPIEInputEvent> DiscardedEvents;
-		FVector2D DiscardedViewportSize;
-		EndRecording(DiscardedEvents, DiscardedViewportSize);
+		FSequence DiscardedSequence;
+		EndRecording(DiscardedSequence);
 		EndReplay();
 		UnregisterInputProcessor();
 	}
@@ -605,7 +596,7 @@ namespace UE_PIE_Automation
 		return Size.X > 0.0 && Size.Y > 0.0;
 	}
 
-	bool FPIEInputRouter::BeginRecording(UWorld* World, double BaseTimeSeconds, FString& OutError)
+	bool FPIEInputRouter::BeginRecording(UWorld* World, int32 InClientIndex, FString& OutError)
 	{
 		if (Mode != EMode::Idle)
 		{
@@ -628,8 +619,12 @@ namespace UE_PIE_Automation
 		Mode = EMode::Recording;
 		ViewportWidget = Widget;
 		TargetWindow = Window;
-		RecordingWorld = World;
-		RecordingBaseTime = BaseTimeSeconds;
+		InputWorld.Reset();
+		ClientIndex = InClientIndex;
+		SessionTime = 0.0;
+		FrameTimes.Reset();
+		WorldSegments.Reset();
+		WorldTickHandle = FWorldDelegates::OnWorldTickStart.AddRaw(this, &FPIEInputRouter::OnWorldTickStart);
 		RecordedViewportSize = Geometry.GetLocalSize();
 		RecordedEvents.Reset();
 		RecordingKeysDown.Reset();
@@ -638,13 +633,21 @@ namespace UE_PIE_Automation
 		return true;
 	}
 
-	void FPIEInputRouter::EndRecording(TArray<FPIEInputEvent>& OutEvents, FVector2D& OutViewportSize)
+	void FPIEInputRouter::EndRecording(FSequence& OutSequence)
 	{
 		if (Mode == EMode::Recording)
 		{
-			OutEvents = MoveTemp(RecordedEvents);
-			OutViewportSize = RecordedViewportSize;
-			RecordingWorld.Reset();
+			// Preserve an edge received after the final world tick.
+			if (!RecordedEvents.IsEmpty() && RecordedEvents.Last().InputFrame == FrameTimes.Num())
+			{
+				FrameTimes.Add(SessionTime);
+			}
+			OutSequence.InputEvents = MoveTemp(RecordedEvents);
+			OutSequence.ViewportSize = RecordedViewportSize;
+			OutSequence.InputFrameTimes = MoveTemp(FrameTimes);
+			OutSequence.WorldSegments = MoveTemp(WorldSegments);
+			InputWorld.Reset();
+			UnbindWorldTick();
 			Mode = EMode::Idle;
 			PhysicalButtonsSuppressed.Reset();
 			RecordingKeysDown.Reset();
@@ -652,8 +655,13 @@ namespace UE_PIE_Automation
 		}
 	}
 
-	bool FPIEInputRouter::BeginReplay(const FSequence& Sequence, FString& OutError)
+	bool FPIEInputRouter::BeginReplay(const FSequence& Sequence, int32 InClientIndex, double SettleSeconds, bool bInMonitor, FString& OutError)
 	{
+		if (Sequence.InputFrameTimes.IsEmpty() || Sequence.WorldSegments.IsEmpty())
+		{
+			OutError = LastError = TEXT("Recording is missing input frames/world segments; create a new recording");
+			return false;
+		}
 		if (Mode == EMode::Recording)
 		{
 			OutError = LastError = TEXT("Raw PIE input recording is active");
@@ -684,6 +692,17 @@ namespace UE_PIE_Automation
 		RecordedViewportSize = Sequence.ViewportSize;
 		ReplayViewportSize = Geometry.GetLocalSize();
 		ReplayEvents = Sequence.InputEvents;
+		FrameTimes = Sequence.InputFrameTimes;
+		WorldSegments = Sequence.WorldSegments;
+		ClientIndex = InClientIndex;
+		SettleRemaining = FMath::Max(0.0, SettleSeconds);
+		bMonitor = bInMonitor;
+		SessionTime = 0.0;
+		ReplayFrame = 0;
+		ReplaySegment = 0;
+		WaitStartedAt = FPlatformTime::Seconds();
+		InputWorld.Reset();
+		WorldTickHandle = FWorldDelegates::OnWorldTickStart.AddRaw(this, &FPIEInputRouter::OnWorldTickStart);
 		NextReplayEvent = 0;
 		ExecutedEventCount = 0;
 		bReplayCancelRequested = false;
@@ -710,6 +729,7 @@ namespace UE_PIE_Automation
 	{
 		const int32 Count = ExecutedEventCount;
 		if (Mode != EMode::Replaying) return Count;
+		UnbindWorldTick();
 		FString ReleaseError;
 		ReleaseHeldInputs(ReleaseError);
 		if (!ReleaseError.IsEmpty())
@@ -739,35 +759,142 @@ namespace UE_PIE_Automation
 		return Mode == EMode::Recording ? RecordedEvents.Num() : 0;
 	}
 
-	bool FPIEInputRouter::DispatchDue(double ElapsedMs, FString& OutError)
+	void FPIEInputRouter::UnbindWorldTick()
 	{
-		if (Mode != EMode::Replaying) return true;
-		return DispatchDueEvents(ReplayEvents, NextReplayEvent, ElapsedMs,
-			[this](const FPIEInputEvent& Event, FString& DispatchError)
-			{
-				if (Dispatch(Event, DispatchError))
-				{
-					++ExecutedEventCount;
-					return true;
-				}
+		FWorldDelegates::OnWorldTickStart.Remove(WorldTickHandle);
+		WorldTickHandle.Reset();
+	}
 
-				LastError = DispatchError;
+	bool FPIEInputRouter::RefreshViewport()
+	{
+		TSharedPtr<SViewport> Widget;
+		TSharedPtr<SWindow> Window;
+		FGeometry Geometry;
+		if (!FindViewport(Widget, Window, Geometry)) return false;
+		ViewportWidget = Widget;
+		TargetWindow = Window;
+		return true;
+	}
+
+	void FPIEInputRouter::OnWorldTickStart(UWorld* World, ELevelTick TickType, float DeltaSeconds)
+	{
+		if (!GEditor || World != GEditor->PlayWorld || TickType != LEVELTICK_All || World->IsPaused()) return;
+		APlayerController* PC = UGameplayStatics::GetPlayerController(World, ClientIndex);
+		const FString Map = UWorld::RemovePIEPrefix(World->GetOutermost()->GetName());
+		const bool bReady = PC && PC->GetLocalPlayer() && RefreshViewport() && World->HasBegunPlay();
+		if (Mode == EMode::Recording)
+		{
+			if (!bReady) return;
+			if (InputWorld.Get() != World)
+			{
+				WorldSegments.Add({FrameTimes.Num(), Map});
+				InputWorld = World;
+				UE_LOG(LogUE_PIE_Automation, Log, TEXT("[PIE-INPUT] Recording segment: %s frame=%d"), *Map, FrameTimes.Num());
+			}
+			SessionTime += FMath::Max(0.0f, DeltaSeconds);
+			FrameTimes.Add(SessionTime);
+			return;
+		}
+		if (Mode != EMode::Replaying || IsReplayComplete() || !LastError.IsEmpty()) return;
+		while (WorldSegments.IsValidIndex(ReplaySegment + 1)
+			&& WorldSegments[ReplaySegment + 1].InputFrame <= ReplayFrame) ++ReplaySegment;
+		const FString& ExpectedMap = WorldSegments[ReplaySegment].Map;
+		auto DispatchEvent = [this](const FPIEInputEvent& Event, FString& Error)
+		{
+			if (!Dispatch(Event, Error)) return false;
+			++ExecutedEventCount;
+			return true;
+		};
+		// Slate handles the UI release before travel; its next input frame may belong to the new world.
+		// Deliver these old-world events before waiting at the world boundary.
+		if (bReady && Map != ExpectedMap && !bMonitor)
+		{
+			if (!DispatchFrameEvents(ReplayEvents, NextReplayEvent, ReplayFrame, Map, DispatchEvent, LastError))
+			{
 				FString ReleaseError;
 				ReleaseHeldInputs(ReleaseError);
-				if (!ReleaseError.IsEmpty())
+				return;
+			}
+		}
+		if (!bReady || Map != ExpectedMap)
+		{
+			if (WaitStartedAt == 0.0) WaitStartedAt = FPlatformTime::Seconds();
+			if (FPlatformTime::Seconds() - WaitStartedAt > 30.0)
+			{
+				LastError = FString::Printf(TEXT("Timed out waiting for PIE map/player/viewport: expected %s, current %s"), *ExpectedMap, *Map);
+				FString ReleaseError;
+				ReleaseHeldInputs(ReleaseError);
+			}
+			return;
+		}
+		WaitStartedAt = 0.0;
+		if (SettleRemaining > 0.0)
+		{
+			SettleRemaining = FMath::Max(0.0, SettleRemaining - DeltaSeconds);
+			return;
+		}
+		if (InputWorld.Get() != World)
+		{
+			InputWorld = World;
+			FSlateApplication& SlateApp = FSlateApplication::Get();
+			const TSharedPtr<SViewport> Widget = ViewportWidget.Pin();
+			// Preserve focus on game UI; restore viewport focus only when outside it.
+			if (SlateApp.GetUserFocusedWidget(0) != Widget && !SlateApp.HasFocusedDescendants(Widget.ToSharedRef()))
+			{
+				SlateApp.SetUserFocus(0, Widget, EFocusCause::SetDirectly);
+			}
+			if (!bMonitor)
+			{
+				// Travel flushes PlayerInput. Reapply only the keys held by this replay.
+				TArray<FPIEInputEvent> Held;
+				for (const auto& Entry : InjectedKeysDown) Held.Add(Entry.Value);
+				for (const auto& Entry : InjectedButtonsDown) Held.Add(Entry.Value);
+				for (FPIEInputEvent& Event : Held)
 				{
-					LastError += TEXT("; ");
-					LastError += ReleaseError;
-					DispatchError = LastError;
+					Event.bIsRepeat = false;
+					if (!Dispatch(Event, LastError)) return;
 				}
-				Mode = EMode::Idle;
-				UnregisterInputProcessor();
-				return false;
-			}, OutError);
+			}
+			UE_LOG(LogUE_PIE_Automation, Log, TEXT("[PIE-INPUT] Replay segment: %s frame=%d"), *Map, ReplayFrame);
+		}
+		if (!bMonitor)
+		{
+			if (!DispatchFrameEvents(ReplayEvents, NextReplayEvent, ReplayFrame, Map, DispatchEvent, LastError))
+			{
+				FString ReleaseError;
+				ReleaseHeldInputs(ReleaseError);
+				return;
+			}
+			if (ReplayEvents.IsValidIndex(NextReplayEvent) && ReplayEvents[NextReplayEvent].InputFrame == ReplayFrame)
+			{
+				LastError = TEXT("Replay reached a new world before its recorded input events completed");
+				return;
+			}
+			// Slate accumulates mouse axes; flush before PlayerController processes input.
+			if (FViewport* Viewport = GEditor->GetPIEViewport())
+			{
+				if (FSceneViewport* SceneViewport = Viewport->AsSceneViewport()) SceneViewport->OnFinishedPointerInput();
+			}
+		}
+		SessionTime = FrameTimes[ReplayFrame++];
 	}
 
 	void FPIEInputRouter::Tick(float, FSlateApplication&, TSharedRef<ICursor>)
 	{
+		if (Mode != EMode::Idle) RefreshViewport();
+		if (Mode == EMode::Replaying && !IsReplayComplete() && LastError.IsEmpty())
+		{
+			if (!GEditor || !GEditor->PlayWorld || (InputWorld.IsValid() && InputWorld.Get() != GEditor->PlayWorld))
+			{
+				if (WaitStartedAt == 0.0) WaitStartedAt = FPlatformTime::Seconds();
+			}
+			if (WaitStartedAt > 0.0 && FPlatformTime::Seconds() - WaitStartedAt > 30.0)
+			{
+				LastError = TEXT("Timed out waiting for PIE world/player/viewport after travel");
+				FString ReleaseError;
+				ReleaseHeldInputs(ReleaseError);
+			}
+		}
 	}
 
 	bool FPIEInputRouter::IsTargetWindowActive(FSlateApplication& SlateApp) const
@@ -826,6 +953,10 @@ namespace UE_PIE_Automation
 			const FGeometry Geometry = Widget->GetCachedGeometry();
 			Result.Position = Geometry.AbsoluteToLocal(ScreenPosition);
 			Result.Delta = Result.Position - Geometry.AbsoluteToLocal(ScreenLastPosition);
+			UWorld* World = GEditor ? GEditor->PlayWorld : nullptr;
+			APlayerController* PC = World ? UGameplayStatics::GetPlayerController(World, ClientIndex) : nullptr;
+			Result.bRelativeMouse = Widget->HasMouseCapture() && PC && !PC->ShouldShowMouseCursor();
+			if (Result.bRelativeMouse) Result.Delta = FVector2D(Event.GetCursorDelta());
 		}
 		for (const FKey& Button : Event.GetPressedButtons())
 		{
@@ -842,9 +973,11 @@ namespace UE_PIE_Automation
 
 	void FPIEInputRouter::Record(FPIEInputEvent&& Event)
 	{
-		UWorld* World = RecordingWorld.Get();
+		UWorld* World = GEditor ? GEditor->PlayWorld : nullptr;
 		if (!World) return;
-		Event.TimeSeconds = FMath::Max(0.0, World->GetTimeSeconds() - RecordingBaseTime);
+		Event.Map = UWorld::RemovePIEPrefix(World->GetOutermost()->GetName());
+		Event.TimeSeconds = SessionTime;
+		Event.InputFrame = FrameTimes.Num();
 		Event.Order = NextEventOrder++;
 		RecordedEvents.Add(MoveTemp(Event));
 	}
@@ -861,7 +994,7 @@ namespace UE_PIE_Automation
 			}
 			return false;
 		}
-		if (Mode == EMode::Replaying)
+		if (Mode == EMode::Replaying && !bMonitor)
 		{
 			const FKey Key = Event.GetKey();
 			if (Key == EKeys::Escape && IsTargetWindowActive(SlateApp))
@@ -903,7 +1036,7 @@ namespace UE_PIE_Automation
 			}
 			return false;
 		}
-		if (Mode == EMode::Replaying && PhysicalKeysSuppressed.Remove(Event.GetKey()) > 0) return true;
+		if (Mode == EMode::Replaying && !bMonitor && PhysicalKeysSuppressed.Remove(Event.GetKey()) > 0) return true;
 		return false;
 	}
 
@@ -917,7 +1050,7 @@ namespace UE_PIE_Automation
 			if (bInside || PhysicalButtonsSuppressed.Num() > 0) Record(MakePointerEvent(EPIEInputEventType::MouseMove, Event));
 			return false;
 		}
-		if (Mode == EMode::Replaying && (bInside || PhysicalButtonsSuppressed.Num() > 0)) return true;
+		if (Mode == EMode::Replaying && !bMonitor && (bInside || PhysicalButtonsSuppressed.Num() > 0)) return true;
 		return false;
 	}
 
@@ -936,7 +1069,7 @@ namespace UE_PIE_Automation
 			}
 			return false;
 		}
-		if (Mode == EMode::Replaying && (bInside || PhysicalButtonsSuppressed.Contains(Button)))
+		if (Mode == EMode::Replaying && !bMonitor && (bInside || PhysicalButtonsSuppressed.Contains(Button)))
 		{
 			PhysicalButtonsSuppressed.Add(Button);
 			return true;
@@ -960,7 +1093,7 @@ namespace UE_PIE_Automation
 			}
 			return false;
 		}
-		if (Mode == EMode::Replaying && PhysicalButtonsSuppressed.Remove(Button) > 0) return true;
+		if (Mode == EMode::Replaying && !bMonitor && PhysicalButtonsSuppressed.Remove(Button) > 0) return true;
 		return false;
 	}
 
@@ -975,7 +1108,7 @@ namespace UE_PIE_Automation
 			Record(MakePointerEvent(EPIEInputEventType::MouseDoubleClick, Event));
 			return false;
 		}
-		if (Mode == EMode::Replaying && bInside)
+		if (Mode == EMode::Replaying && !bMonitor && bInside)
 		{
 			PhysicalButtonsSuppressed.Add(Event.GetEffectingButton());
 			return true;
@@ -993,7 +1126,7 @@ namespace UE_PIE_Automation
 			Record(MakePointerEvent(EPIEInputEventType::MouseWheel, Event));
 			return false;
 		}
-		if (Mode == EMode::Replaying && bInside) return true;
+		if (Mode == EMode::Replaying && !bMonitor && bInside) return true;
 		return false;
 	}
 
@@ -1060,15 +1193,27 @@ namespace UE_PIE_Automation
 			OutError = TEXT("PIE input target window was closed during replay");
 			return false;
 		}
-		const FVector2D ScreenPosition = ToScreenPosition(Event.Position);
-		const FVector2D ScreenDelta = ToScreenDelta(Event.Position, Event.Delta);
+		const FVector2D ScreenPosition = Event.bRelativeMouse ? SlateApp.GetCursorPos() : ToScreenPosition(Event.Position);
+		const FVector2D ScreenDelta = Event.bRelativeMouse ? Event.Delta : ToScreenDelta(Event.Position, Event.Delta);
 		const FVector2D LastScreenPosition = ScreenPosition - ScreenDelta;
 		// Slate button release checks hover state; keep the platform cursor aligned with replay coordinates.
-		SlateApp.SetCursorPos(ScreenPosition);
+		if (!Event.bRelativeMouse) SlateApp.SetCursorPos(ScreenPosition);
 		const TSet<FKey> Buttons = MakePressedButtons(Event);
 		const FKey EffectingButton = Event.Key.IsEmpty() ? FKey() : FKey(FName(*Event.Key));
 		const FPointerEvent PointerEvent(Event.UserIndex, Event.PointerIndex, ScreenPosition, LastScreenPosition,
 			Buttons, EffectingButton, Event.WheelDelta, MakeModifiers(Event));
+		const TSharedPtr<SViewport> Widget = ViewportWidget.Pin();
+		if (Event.bRelativeMouse && !Widget->HasMouseCapture())
+		{
+			FWidgetPath Path;
+			if (!SlateApp.GeneratePathToWidgetUnchecked(Widget.ToSharedRef(), Path))
+			{
+				OutError = TEXT("Could not restore PIE mouse capture");
+				return false;
+			}
+			SlateApp.ProcessReply(Path, FReply::Handled().UseHighPrecisionMouseMovement(Widget.ToSharedRef())
+				.SetUserFocus(Widget.ToSharedRef()), nullptr, &PointerEvent, Event.UserIndex);
+		}
 
 		switch (Event.Type)
 		{

@@ -14,7 +14,17 @@
 #include "PIE/PIEInputRecorder.h"
 #include "PIE/PIEFrameSampler.h"
 #include "Engine/World.h"
+#include "Engine/Engine.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerInput.h"
+#include "Components/InputComponent.h"
+#include "Engine/LocalPlayer.h"
+#include "EnhancedInputComponent.h"
+#include "EnhancedInputSubsystems.h"
+#include "EnhancedPlayerInput.h"
+#include "InputAction.h"
+#include "InputMappingContext.h"
+#include "InputKeyEventArgs.h"
 #include "PIE/PIESequenceFormat.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -99,11 +109,14 @@ bool FPIERawInputSequenceTest::RunTest(const FString& /*Parameters*/)
 	FSequence Sequence;
 	Sequence.SourceRecordingId = TEXT("raw-input-test");
 	Sequence.ViewportSize = FVector2D(1280.0, 720.0);
+	Sequence.InputFrameTimes = {0.1, 0.2};
+	Sequence.WorldSegments = {{0, TEXT("/Game/Entry")}, {1, TEXT("/Game/Battle")}};
 
 	FPIEInputEvent KeyDown;
 	KeyDown.Type = EPIEInputEventType::KeyDown;
 	KeyDown.TimeSeconds = 0.1;
 	KeyDown.Order = 0;
+	KeyDown.Map = TEXT("/Game/Entry");
 	KeyDown.Key = TEXT("LeftControl");
 	KeyDown.KeyCode = 17;
 	Sequence.InputEvents.Add(KeyDown);
@@ -117,6 +130,9 @@ bool FPIERawInputSequenceTest::RunTest(const FString& /*Parameters*/)
 	MouseDown.Type = EPIEInputEventType::MouseButtonDown;
 	MouseDown.TimeSeconds = 0.2;
 	MouseDown.Order = 2;
+	MouseDown.InputFrame = 1;
+	MouseDown.Map = TEXT("/Game/Battle");
+	MouseDown.bRelativeMouse = true;
 	MouseDown.Key = EKeys::LeftMouseButton.GetFName().ToString();
 	MouseDown.Position = FVector2D(40.0, 80.0);
 	MouseDown.PressedButtons.Add(MouseDown.Key);
@@ -132,7 +148,16 @@ bool FPIERawInputSequenceTest::RunTest(const FString& /*Parameters*/)
 		TestTrue(TEXT("same-time order is retained"), RoundTripped.InputEvents[0].Order == 0 && RoundTripped.InputEvents[1].Order == 1);
 		TestEqual(TEXT("pointer X is retained"), RoundTripped.InputEvents[2].Position.X, 40.0);
 		TestTrue(TEXT("mouse button state is retained"), RoundTripped.InputEvents[2].PressedButtons.Contains(MouseDown.Key));
+		TestTrue(TEXT("game mouse mode is retained"), RoundTripped.InputEvents[2].bRelativeMouse);
+		TestEqual(TEXT("world travel frames are retained"), RoundTripped.WorldSegments[1].InputFrame, 1);
+		TestEqual(TEXT("session time survives travel"), RoundTripped.InputFrameTimes.Last(), 0.2);
 	}
+	FSequence InvalidTimeline = Sequence;
+	InvalidTimeline.InputFrameTimes[1] = 0.01;
+	TestFalse(TEXT("world time reset is rejected"), SequenceFromJson(SequenceToJson(InvalidTimeline), RoundTripped, Error));
+	FSequence InvalidFrame = Sequence;
+	InvalidFrame.InputEvents.Last().InputFrame = 2;
+	TestFalse(TEXT("events outside input frames are rejected"), SequenceFromJson(SequenceToJson(InvalidFrame), RoundTripped, Error));
 
 	TSharedRef<FJsonObject> Reordered = SequenceToJson(Sequence);
 	const TArray<TSharedPtr<FJsonValue>>* StoredEvents = nullptr;
@@ -147,12 +172,12 @@ bool FPIERawInputSequenceTest::RunTest(const FString& /*Parameters*/)
 	}
 
 	TSharedRef<FJsonObject> OldSequence = MakeShared<FJsonObject>();
-	OldSequence->SetNumberField(TEXT("version"), 2);
+	OldSequence->SetNumberField(TEXT("version"), 3);
 	OldSequence->SetArrayField(TEXT("steps"), TArray<TSharedPtr<FJsonValue>>());
 	TestFalse(TEXT("old recordings are rejected"), SequenceFromJson(OldSequence, RoundTripped, Error));
 	TestTrue(TEXT("old recording error asks for a new recording"), Error.Contains(TEXT("new recording")));
 	TSharedRef<FJsonObject> OldManifest = MakeShared<FJsonObject>();
-	OldManifest->SetNumberField(TEXT("version"), 2);
+	OldManifest->SetNumberField(TEXT("version"), 3);
 	OldManifest->SetStringField(TEXT("id"), TEXT("old-recording"));
 	FManifest RejectedManifest;
 	TestFalse(TEXT("old manifest versions are rejected"), ManifestFromJson(OldManifest, RejectedManifest, Error));
@@ -189,11 +214,13 @@ bool FPIERawInputDispatchTest::RunTest(const FString& /*Parameters*/)
 	Later.Type = EPIEInputEventType::KeyUp;
 	Later.bIsRepeat = false;
 	Later.TimeSeconds = 0.2;
+	Later.InputFrame = 1;
 	Later.Order = 2;
 	Events.Add(Later);
 	FPIEInputEvent RightDown = First;
 	RightDown.Key = TEXT("D");
 	RightDown.TimeSeconds = 0.2;
+	RightDown.InputFrame = 1;
 	RightDown.Order = 3;
 	Events.Add(RightDown);
 	FPIEInputEvent RightUp = RightDown;
@@ -213,17 +240,18 @@ bool FPIERawInputDispatchTest::RunTest(const FString& /*Parameters*/)
 	};
 	FString DispatchError;
 	TestTrue(TEXT("due events dispatch successfully"),
-		FPIEInputRouter::DispatchDueEvents(Events, Cursor, 100.0, DispatchEvent, DispatchError));
-	TestEqual(TEXT("events due at 100 ms are dispatched once"), DispatchedOrders.Num(), 2);
+		FPIEInputRouter::DispatchFrameEvents(Events, Cursor, 0, TEXT(""), DispatchEvent, DispatchError));
+	TestEqual(TEXT("only the first processing frame is dispatched"), DispatchedOrders.Num(), 2);
 	TestTrue(TEXT("taking an event does not also advance the cursor"), Cursor == 2);
 	TestTrue(TEXT("the repeated W key remains held"), KeysDownDuringDispatch.Contains(TEXT("W")));
 	TestTrue(TEXT("later events dispatch successfully"),
-		FPIEInputRouter::DispatchDueEvents(Events, Cursor, 200.0, DispatchEvent, DispatchError));
+		FPIEInputRouter::DispatchFrameEvents(Events, Cursor, 1, TEXT(""), DispatchEvent, DispatchError));
 	TestEqual(TEXT("all ordered events dispatch exactly once"), DispatchedOrders.Num(), Events.Num());
 	TestTrue(TEXT("same-time W release and D press preserve order"),
 		DispatchedOrders.IsValidIndex(4) && DispatchedOrders[2] == 2 && DispatchedOrders[3] == 3 && DispatchedOrders[4] == 4);
 	TestTrue(TEXT("all direction keys are released"), KeysDownDuringDispatch.IsEmpty());
-	TestNull(TEXT("completed input is not dispatched twice"), FPIEInputRouter::TakeNextDueEvent(Events, Cursor, 200.0));
+	FPIEInputRouter::DispatchFrameEvents(Events, Cursor, 1, TEXT(""), DispatchEvent, DispatchError);
+	TestEqual(TEXT("completed input is not dispatched twice"), DispatchedOrders.Num(), Events.Num());
 
 	int32 FailedCursor = 0;
 	auto RejectEvent = [](const FPIEInputEvent&, FString& Error)
@@ -232,8 +260,21 @@ bool FPIERawInputDispatchTest::RunTest(const FString& /*Parameters*/)
 		return false;
 	};
 	TestFalse(TEXT("dispatch errors are returned"),
-		FPIEInputRouter::DispatchDueEvents(Events, FailedCursor, 100.0, RejectEvent, DispatchError));
+		FPIEInputRouter::DispatchFrameEvents(Events, FailedCursor, 0, TEXT(""), RejectEvent, DispatchError));
 	TestEqual(TEXT("failed events are not consumed"), FailedCursor, 0);
+	FPIEInputEvent EnterRelease;
+	EnterRelease.Type = EPIEInputEventType::MouseButtonUp;
+	EnterRelease.InputFrame = 1;
+	EnterRelease.Map = TEXT("/Game/Entry");
+	FPIEInputEvent BattlePress = EnterRelease;
+	BattlePress.Type = EPIEInputEventType::KeyDown;
+	BattlePress.Map = TEXT("/Game/Battle");
+	TArray<FPIEInputEvent> BoundaryEvents = {EnterRelease, BattlePress};
+	int32 BoundaryCursor = 0;
+	FPIEInputRouter::DispatchFrameEvents(BoundaryEvents, BoundaryCursor, 1, TEXT("/Game/Entry"), DispatchEvent, DispatchError);
+	TestEqual(TEXT("Enter release executes before waiting for new map"), BoundaryCursor, 1);
+	FPIEInputRouter::DispatchFrameEvents(BoundaryEvents, BoundaryCursor, 1, TEXT("/Game/Battle"), DispatchEvent, DispatchError);
+	TestEqual(TEXT("game input executes after the new map is ready"), BoundaryCursor, 2);
 
 	TMap<FKey, FPIEInputEvent> KeysDown;
 	FPIEInputEvent KeyPress;
@@ -285,7 +326,81 @@ bool FPIESamplerWithoutPawnTest::RunTest(const FString& /*Parameters*/)
 		const FCSVRow Row = Sampler.SampleFrame(World, 1, 0.1, 0.1);
 		TestTrue(TEXT("markers are sampled without a pawn"), Row.EdgeEvents.Contains(TEXT("mark:without-pawn")));
 		Sampler.Reset();
+		UWorld* NextWorld = UWorld::CreateWorld(EWorldType::Game, false);
+		APlayerController* NextController = NextWorld->SpawnActor<APlayerController>();
+		NextWorld->AddController(NextController);
+		TestTrue(TEXT("sampler attaches to first world"), Sampler.AttachToPIE(World));
+		TestTrue(TEXT("sampler rebinds to next world without a pawn"), Sampler.AttachToPIE(NextWorld));
+		Sampler.QueueMarker(TEXT("after-travel"));
+		TestTrue(TEXT("sampling continues after travel"), Sampler.SampleFrame(NextWorld, 2, 0.2, 0.1).EdgeEvents.Contains(TEXT("mark:after-travel")));
+		Sampler.Reset();
+		NextWorld->DestroyWorld(false);
 	}
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPIERawInputConsumersTest,
+	"UE_PIE_Automation.RawInput.LegacyAndEnhancedConsumers",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FPIERawInputConsumersTest::RunTest(const FString& /*Parameters*/)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	if (!TestNotNull(TEXT("input test world"), World)) return false;
+	APlayerController* PC = World->SpawnActor<APlayerController>();
+	World->AddController(PC);
+	AActor* Actor = World->SpawnActor<AActor>();
+	TestNull(TEXT("input consumer does not require a pawn"), PC->GetPawn());
+
+	PC->PlayerInput = NewObject<UPlayerInput>(PC);
+	UInputComponent* Legacy = NewObject<UInputComponent>(Actor);
+	int32 Presses = 0;
+	FInputKeyBinding Binding(FInputChord(EKeys::W), IE_Pressed);
+	Binding.KeyDelegate.GetDelegateForManualSet().BindLambda([&Presses]() { ++Presses; });
+	Legacy->KeyBindings.Add(MoveTemp(Binding));
+	Legacy->BindAxisKey(EKeys::MouseX);
+	PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W, IE_Pressed, 1.0f));
+	PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::MouseX, IE_Axis, 5.0f));
+	PC->PlayerInput->ProcessInputStack({Legacy}, 1.0f / 60.0f, false);
+	TestEqual(TEXT("raw key reaches legacy actor binding once"), Presses, 1);
+	TestTrue(TEXT("raw mouse reaches legacy axis"), Legacy->GetAxisKeyValue(EKeys::MouseX) > 0.0f);
+	PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W, IE_Released, 0.0f));
+	PC->PlayerInput->ProcessInputStack({Legacy}, 1.0f / 60.0f, false);
+	TestFalse(TEXT("legacy key released"), PC->PlayerInput->IsPressed(EKeys::W));
+
+	ULocalPlayer* LocalPlayer = NewObject<ULocalPlayer>(GEngine);
+	LocalPlayer->PlayerController = PC;
+	PC->Player = LocalPlayer;
+	PC->PlayerInput = NewObject<UEnhancedPlayerInput>(PC);
+	UEnhancedInputComponent* Enhanced = NewObject<UEnhancedInputComponent>(Actor);
+	UEnhancedInputLocalPlayerSubsystem* Subsystem = NewObject<UEnhancedInputLocalPlayerSubsystem>(LocalPlayer);
+	UInputMappingContext* Context = NewObject<UInputMappingContext>();
+	UInputAction* Move = NewObject<UInputAction>();
+	Move->ValueType = EInputActionValueType::Axis1D;
+	UInputAction* Look = NewObject<UInputAction>();
+	Look->ValueType = EInputActionValueType::Axis1D;
+	Context->MapKey(Move, EKeys::W);
+	Context->MapKey(Look, EKeys::MouseX);
+	Enhanced->BindActionValue(Move);
+	Enhanced->BindActionValue(Look);
+	FModifyContextOptions Options;
+	Options.bForceImmediately = true;
+	Subsystem->AddMappingContext(Context, 0, Options);
+	PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W, IE_Pressed, 1.0f));
+	PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::MouseX, IE_Axis, 5.0f));
+	PC->PlayerInput->ProcessInputStack({Enhanced}, 1.0f / 60.0f, false);
+	TestTrue(TEXT("raw key reaches Enhanced Input on ordinary actor"), Enhanced->GetBoundActionValue(Move).Get<float>() > 0.0f);
+	TestTrue(TEXT("raw mouse reaches Enhanced Input"), Enhanced->GetBoundActionValue(Look).Get<float>() > 0.0f);
+	PC->PlayerInput->ProcessInputStack({Enhanced}, 1.0f / 60.0f, false);
+	TestTrue(TEXT("held Enhanced key persists without repeated injection"), Enhanced->GetBoundActionValue(Move).Get<float>() > 0.0f);
+	PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W, IE_Released, 0.0f));
+	PC->PlayerInput->ProcessInputStack({Enhanced}, 1.0f / 60.0f, false);
+	TestEqual(TEXT("Enhanced key releases"), Enhanced->GetBoundActionValue(Move).Get<float>(), 0.0f);
+	Subsystem->RemoveMappingContext(Context, Options);
+	PC->Player = nullptr;
+	LocalPlayer->PlayerController = nullptr;
 	World->DestroyWorld(false);
 	return true;
 }

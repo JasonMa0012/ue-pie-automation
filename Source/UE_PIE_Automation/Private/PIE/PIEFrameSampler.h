@@ -57,7 +57,7 @@ namespace UE_PIE_Automation
 
 		// Attach to the configured player controller; discover pawn input
 		// bindings when available. Returns true once attached; subsequent
-		// calls are no-ops. Safe to call every frame until it succeeds.
+		// calls rebind when the PIE world changes. Safe to call every frame.
 		bool AttachToPIE(UWorld* PIEWorld);
 		bool IsAttached() const { return bAttached; }
 

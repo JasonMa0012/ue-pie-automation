@@ -159,7 +159,6 @@ namespace UE_PIE_Automation
 		void OnBeginPIE(bool bIsSimulating);
 		void OnEndPIE(bool bIsSimulating);
 		void OnEndFrame();
-		void OnWorldPreActorTick(UWorld* World, ELevelTick TickType, float DeltaSeconds);
 		FReplayerFinishResult FinaliseCurrent();
 		void ExecutePendingSteps(double ElapsedMs);
 		void ApplyFPSPin(UWorld* PIEWorld, int32 Hz);
@@ -202,7 +201,6 @@ namespace UE_PIE_Automation
 		FPIEFrameSampler Sampler;
 		uint64 ReplayFrameCounter = 0;
 
-		double AttachTime = 0.0;
 		int32 NextStepIndex = 0;
 		int32 ExecutedSteps = 0;
 		int32 InputEventsExecuted = 0;
@@ -246,7 +244,6 @@ namespace UE_PIE_Automation
 		FDelegateHandle BeginPIEHandle;
 		FDelegateHandle EndPIEHandle;
 		FDelegateHandle OnEndFrameHandle;
-		FDelegateHandle WorldPreActorTickHandle;
 		bool bEndFrameBound = false;
 
 		// Fixed-timestep save/restore (item X2).

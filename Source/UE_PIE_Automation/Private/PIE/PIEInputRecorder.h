@@ -25,7 +25,7 @@ struct FGeometry;
  * State machine:
  *   Idle              No recording armed; no end-frame tick.
  *   Armed             Will start on the next BeginPIE.
- *   WaitingForPawn    BeginPIE fired; sampler waiting for the player pawn.
+ *   WaitingForPawn    BeginPIE fired; sampler waiting for the player controller.
  *   Recording         Sampler attached; emit one row per end-of-frame.
  *                     Returns to Idle (and writes artifacts) on EndPIE
  *                     or pie_record_stop.
@@ -103,18 +103,19 @@ namespace UE_PIE_Automation
 	{
 	public:
 		static FPIEInputRouter& Get();
-		static const FPIEInputEvent* TakeNextDueEvent(const TArray<FPIEInputEvent>& Events, int32& Cursor, double ElapsedMs);
-		static bool DispatchDueEvents(const TArray<FPIEInputEvent>& Events, int32& Cursor, double ElapsedMs,
+		static bool DispatchFrameEvents(const TArray<FPIEInputEvent>& Events, int32& Cursor, int32 InputFrame, const FString& Map,
 			TFunctionRef<bool(const FPIEInputEvent&, FString&)> DispatchEvent, FString& OutError);
 		static TArray<FPIEInputEvent> BuildHeldInputReleaseEvents(
 			const TMap<FKey, FPIEInputEvent>& KeysDown,
 			const TMap<FKey, FPIEInputEvent>& ButtonsDown);
 		void Shutdown();
 
-		bool BeginRecording(UWorld* World, double BaseTimeSeconds, FString& OutError);
-		void EndRecording(TArray<FPIEInputEvent>& OutEvents, FVector2D& OutViewportSize);
-		bool BeginReplay(const FSequence& Sequence, FString& OutError);
-		bool DispatchDue(double ElapsedMs, FString& OutError);
+		bool BeginRecording(UWorld* World, int32 ClientIndex, FString& OutError);
+		void EndRecording(FSequence& OutSequence);
+		bool BeginReplay(const FSequence& Sequence, int32 ClientIndex, double SettleSeconds, bool bMonitor, FString& OutError);
+		double GetElapsedSeconds() const { return SessionTime; }
+		bool IsReplayComplete() const { return ReplayFrame >= FrameTimes.Num(); }
+		int32 GetReplayFrame() const { return ReplayFrame; }
 		int32 EndReplay();
 		bool ConsumeReplayCancelRequested();
 
@@ -145,6 +146,9 @@ namespace UE_PIE_Automation
 		void Record(FPIEInputEvent&& Event);
 		bool Dispatch(const FPIEInputEvent& Event, FString& OutError);
 		void ReleaseHeldInputs(FString& OutError);
+		void OnWorldTickStart(UWorld* World, ELevelTick TickType, float DeltaSeconds);
+		bool RefreshViewport();
+		void UnbindWorldTick();
 		FModifierKeysState MakeModifiers(const FPIEInputEvent& Event) const;
 		TSet<FKey> MakePressedButtons(const FPIEInputEvent& Event) const;
 		FVector2D ToScreenPosition(const FVector2D& LocalPosition) const;
@@ -153,11 +157,20 @@ namespace UE_PIE_Automation
 		TSharedPtr<FPIEInputRouter> RegisteredHandle;
 		TWeakPtr<SViewport> ViewportWidget;
 		TWeakPtr<SWindow> TargetWindow;
-		TWeakObjectPtr<UWorld> RecordingWorld;
+		TWeakObjectPtr<UWorld> InputWorld;
+		FDelegateHandle WorldTickHandle;
 		EMode Mode = EMode::Idle;
 		FVector2D RecordedViewportSize = FVector2D::ZeroVector;
 		FVector2D ReplayViewportSize = FVector2D::ZeroVector;
-		double RecordingBaseTime = 0.0;
+		double SessionTime = 0.0;
+		double SettleRemaining = 0.0;
+		double WaitStartedAt = 0.0;
+		int32 ClientIndex = 0;
+		int32 ReplayFrame = 0;
+		int32 ReplaySegment = 0;
+		bool bMonitor = false;
+		TArray<double> FrameTimes;
+		TArray<FPIEWorldSegment> WorldSegments;
 		int32 NextEventOrder = 0;
 		int32 NextReplayEvent = 0;
 		int32 ExecutedEventCount = 0;
@@ -223,11 +236,9 @@ namespace UE_PIE_Automation
 		TArray<FTrackedActorRow> ActorRows;
 		TMap<FString, TWeakObjectPtr<AActor>> TrackedActorCache;
 		TArray<FMarker> Markers;
-		TArray<FPIEInputEvent> InputEvents;
-		FVector2D RecordedViewportSize = FVector2D::ZeroVector;
+		FSequence RecordedSequence;
 		bool bRawInputStarted = false;
 		FString InputError;
-		double StartTime = 0.0;
 		FString StartedAt;
 
 		FDelegateHandle BeginPIEHandle;

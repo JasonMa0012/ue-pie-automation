@@ -163,6 +163,8 @@ namespace UE_PIE_Automation
 		O->SetStringField(TEXT("type"), InputEventTypeToString(Event.Type));
 		O->SetNumberField(TEXT("time_seconds"), Event.TimeSeconds);
 		O->SetNumberField(TEXT("order"), Event.Order);
+		O->SetNumberField(TEXT("input_frame"), Event.InputFrame);
+		O->SetStringField(TEXT("map"), Event.Map);
 		O->SetNumberField(TEXT("user_index"), Event.UserIndex);
 		O->SetNumberField(TEXT("pointer_index"), Event.PointerIndex);
 		O->SetBoolField(TEXT("shift"), Event.bShift);
@@ -180,6 +182,7 @@ namespace UE_PIE_Automation
 		else
 		{
 			TArray<TSharedPtr<FJsonValue>> Pos;
+			O->SetBoolField(TEXT("relative_mouse"), Event.bRelativeMouse);
 			Pos.Add(MakeShared<FJsonValueNumber>(Event.Position.X));
 			Pos.Add(MakeShared<FJsonValueNumber>(Event.Position.Y));
 			O->SetArrayField(TEXT("position"), Pos);
@@ -209,7 +212,9 @@ namespace UE_PIE_Automation
 			return false;
 		}
 		if (!O->TryGetNumberField(TEXT("time_seconds"), Out.TimeSeconds) || !FMath::IsFinite(Out.TimeSeconds) || Out.TimeSeconds < 0.0
-			|| !O->TryGetNumberField(TEXT("order"), Out.Order) || Out.Order < 0)
+			|| !O->TryGetNumberField(TEXT("order"), Out.Order) || Out.Order < 0
+			|| !O->TryGetNumberField(TEXT("input_frame"), Out.InputFrame) || Out.InputFrame < 0
+			|| !O->TryGetStringField(TEXT("map"), Out.Map) || !Out.Map.StartsWith(TEXT("/")))
 		{
 			OutError = TEXT("input event is missing a valid time or order");
 			return false;
@@ -228,6 +233,12 @@ namespace UE_PIE_Automation
 		}
 		Out.UserIndex = static_cast<uint32>(UserIndexValue);
 		Out.PointerIndex = static_cast<uint32>(PointerIndexValue);
+		if (Out.Type != EPIEInputEventType::KeyDown && Out.Type != EPIEInputEventType::KeyUp
+			&& !O->TryGetBoolField(TEXT("relative_mouse"), Out.bRelativeMouse))
+		{
+			OutError = TEXT("input event is missing relative_mouse");
+			return false;
+		}
 		double Number = 0.0;
 
 		if (Out.Type == EPIEInputEventType::KeyDown || Out.Type == EPIEInputEventType::KeyUp)
@@ -526,6 +537,18 @@ namespace UE_PIE_Automation
 			InputEvents.Add(MakeShared<FJsonValueObject>(InputEventToJson(Event)));
 		}
 		O->SetArrayField(TEXT("input_events"), InputEvents);
+		TArray<TSharedPtr<FJsonValue>> FrameTimes;
+		for (double Time : S.InputFrameTimes) FrameTimes.Add(MakeShared<FJsonValueNumber>(Time));
+		O->SetArrayField(TEXT("input_frame_times"), FrameTimes);
+		TArray<TSharedPtr<FJsonValue>> Segments;
+		for (const FPIEWorldSegment& Segment : S.WorldSegments)
+		{
+			TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
+			Entry->SetNumberField(TEXT("input_frame"), Segment.InputFrame);
+			Entry->SetStringField(TEXT("map"), Segment.Map);
+			Segments.Add(MakeShared<FJsonValueObject>(Entry));
+		}
+		O->SetArrayField(TEXT("world_segments"), Segments);
 
 		TArray<TSharedPtr<FJsonValue>> StepsArr;
 		for (const FStep& Step : S.Steps)
@@ -596,12 +619,57 @@ namespace UE_PIE_Automation
 			return false;
 		}
 		Out.ViewportSize = FVector2D(ViewportWidth, ViewportHeight);
+		const TArray<TSharedPtr<FJsonValue>>* FrameTimes = nullptr;
+		const TArray<TSharedPtr<FJsonValue>>* Segments = nullptr;
+		if (!Obj->TryGetArrayField(TEXT("input_frame_times"), FrameTimes) || !FrameTimes || FrameTimes->IsEmpty()
+			|| !Obj->TryGetArrayField(TEXT("world_segments"), Segments) || !Segments || Segments->IsEmpty())
+		{
+			OutError = TEXT("sequence: missing input frames or world segments; create a new recording");
+			return false;
+		}
+		double FrameTime = 0.0;
+		for (const TSharedPtr<FJsonValue>& Value : *FrameTimes)
+		{
+			double Time = 0.0;
+			if (!Value.IsValid() || !Value->TryGetNumber(Time) || !FMath::IsFinite(Time) || Time < FrameTime)
+			{
+				OutError = TEXT("sequence: invalid input frame timeline");
+				return false;
+			}
+			Out.InputFrameTimes.Add(Time);
+			FrameTime = Time;
+		}
+		int32 PreviousSegmentFrame = -1;
+		for (const TSharedPtr<FJsonValue>& Value : *Segments)
+		{
+			const TSharedPtr<FJsonObject> Entry = Value.IsValid() ? Value->AsObject() : nullptr;
+			FPIEWorldSegment Segment;
+			if (!Entry.IsValid() || !Entry->TryGetNumberField(TEXT("input_frame"), Segment.InputFrame)
+				|| !Entry->TryGetStringField(TEXT("map"), Segment.Map) || !Segment.Map.StartsWith(TEXT("/"))
+				|| !Out.InputFrameTimes.IsValidIndex(Segment.InputFrame) || Segment.InputFrame <= PreviousSegmentFrame
+				|| (PreviousSegmentFrame == -1 && Segment.InputFrame != 0))
+			{
+				OutError = TEXT("sequence: invalid world segment");
+				return false;
+			}
+			PreviousSegmentFrame = Segment.InputFrame;
+			Out.WorldSegments.Add(MoveTemp(Segment));
+		}
 		double PreviousTime = -1.0;
 		int32 PreviousOrder = -1;
+		int32 PreviousInputFrame = -1;
 		for (const TSharedPtr<FJsonValue>& Value : *InputEvents)
 		{
 			FPIEInputEvent Event;
 			if (!ReadInputEvent(Value, Event, OutError)) return false;
+			if (!Out.InputFrameTimes.IsValidIndex(Event.InputFrame) || Event.InputFrame < PreviousInputFrame
+				|| Event.TimeSeconds > Out.InputFrameTimes[Event.InputFrame] + 0.0001
+				|| (Event.InputFrame > 0 && Event.TimeSeconds + 0.0001 < Out.InputFrameTimes[Event.InputFrame - 1]))
+			{
+				OutError = TEXT("sequence: input event is outside its processing frame");
+				return false;
+			}
+			PreviousInputFrame = Event.InputFrame;
 			if (Event.TimeSeconds < PreviousTime || (Event.TimeSeconds == PreviousTime && Event.Order <= PreviousOrder))
 			{
 				OutError = TEXT("sequence: input_events are not in stable time/order sequence");

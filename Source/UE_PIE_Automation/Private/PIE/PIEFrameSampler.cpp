@@ -359,15 +359,22 @@ namespace UE_PIE_Automation
 
 	bool FPIEFrameSampler::AttachToPIE(UWorld* PIEWorld)
 	{
-		if (bAttached) return true;
+		if (bAttached && AttachedWorld.Get() == PIEWorld) return true;
 		if (!PIEWorld) return false;
 		APlayerController* PC = (Config.ClientIndex > 0)
 			? UGameplayStatics::GetPlayerController(PIEWorld, Config.ClientIndex)
 			: PIEWorld->GetFirstPlayerController();
 		if (!PC) return false;
 		APawn* Pawn = PC->GetPawn();
-		PawnClassPath = Pawn ? Pawn->GetClass()->GetPathName() : FString();
-		PIEWorldPath = PIEWorld->GetPathName();
+		if (!bAttached)
+		{
+			PawnClassPath = Pawn ? Pawn->GetClass()->GetPathName() : FString();
+			PIEWorldPath = PIEWorld->GetPathName();
+		}
+		UnbindWorldPreActorTick();
+		bHasPreActorTickMousePosition = false;
+		PrevPawnLocation = Pawn ? Pawn->GetActorLocation() : FVector::ZeroVector;
+		for (FTrackedAction& Action : Tracked) Action.bWasActive = false;
 
 		DiscoverActions(PC, Pawn);
 
