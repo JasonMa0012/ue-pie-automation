@@ -36,7 +36,19 @@ The tools cover input injection, recording, replay, drift analysis, snapshots, o
 5. Use `PIEStudio.frame_diff` to compare the latest PNG frames with `ref_frames`; defaults are 8 channel tolerance and 0.5% changed pixels.
 6. Read `drift.json`, session errors, CSV data or captured frames from the returned artifact paths.
 
-The plugin also adds a UE PIE Automation toolbar group and a dockable editor panel. Those UI paths call the same native C++ services as MCP.
+### Verify an existing recording after code changes
+
+Use the MCP tool descriptions as the agent instructions; reading this README is not required by the client. The minimal **Replay & Capture** workflow is:
+
+1. `PIEStudio.replay_run({"recording_id":"recording-20261009-161624-1a2a"})`.
+2. Poll `PIEStudio.replay_status({})` until playback has started and finished: `state` is `idle` or `completed`, `pie_active` is false and `capture_frames_pending` is 0. The initial `armed` response can have `pie_active=false` and an old `last_result`; it is not completion.
+3. `PIEStudio.frame_diff({"recording_id":"recording-20261009-161624-1a2a"})` returns batch image statistics and per-frame differences.
+
+No repeated input-action paths, sampling rate, seed or settle delay are needed. These come from the recording. PNG capture uses the plugin defaults; optional overrides are only needed for a baseline made with different capture settings. MCP does not read unsaved panel FPS/resolution/time-scale controls. Inspect capture errors, dropped frames and missing frames before treating the comparison as a regression result. `drift.json` and `replay_analyze` describe gameplay state drift, not pixel differences.
+
+Replay replaces the latest `frames` and preserves `ref_frames`. Never call `reference_save` during verification; it replaces the baseline and requires the user's explicit request.
+
+The plugin adds a dockable PIE Automation panel under Tools. The UI and MCP call the same native C++ services.
 
 ## Data layout
 

@@ -72,4 +72,35 @@ bool FPIEContactSheetComposeTest::RunTest(const FString& /*Parameters*/)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPIEPNGCompressionLosslessTest,
+	"UE_PIE_Automation.Capture.PNGCompressionLossless",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FPIEPNGCompressionLosslessTest::RunTest(const FString& /*Parameters*/)
+{
+	IImageWrapperModule& IWM = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+	const int32 W = 64, H = 48;
+	TArray<FColor> Pixels;
+	for (int32 Index = 0; Index < W * H; ++Index)
+	{
+		Pixels.Add(FColor(Index % 256, (Index * 7) % 256, (Index * 13) % 256, (Index * 17) % 256));
+	}
+	const int64 NumBytes = static_cast<int64>(Pixels.Num()) * sizeof(FColor);
+	for (const int32 Compression : { -1, -7 })
+	{
+		TSharedPtr<IImageWrapper> Encoder = IWM.CreateImageWrapper(EImageFormat::PNG);
+		if (!TestTrue(TEXT("accepts BGRA pixels"), Encoder.IsValid() &&
+			Encoder->SetRaw(Pixels.GetData(), NumBytes, W, H, ERGBFormat::BGRA, 8))) return false;
+		const TArray64<uint8> PNG = Encoder->GetCompressed(Compression);
+		TSharedPtr<IImageWrapper> Decoder = IWM.CreateImageWrapper(EImageFormat::PNG);
+		TArray64<uint8> Decoded;
+		if (!TestTrue(TEXT("decodes PNG"), Decoder.IsValid() &&
+			Decoder->SetCompressed(PNG.GetData(), PNG.Num()) && Decoder->GetRaw(ERGBFormat::BGRA, 8, Decoded))) return false;
+		TestTrue(TEXT("compression preserves every BGRA byte"), Decoded.Num() == NumBytes &&
+			FMemory::Memcmp(Decoded.GetData(), Pixels.GetData(), NumBytes) == 0);
+	}
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

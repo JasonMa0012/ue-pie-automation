@@ -727,7 +727,7 @@ void SMCPPIEPanel::RefreshRecordings()
 					SNew(SButton)
 					.ButtonStyle(FAppStyle::Get(), "FlatButton.Success")
 					.TextStyle(FAppStyle::Get(), "FlatButton.DefaultTextStyle")
-					.Text(FText::FromString(TEXT("Play & Capture")))
+					.Text(FText::FromString(TEXT("Replay & Capture")))
 					.ToolTipText(FText::FromString(TEXT("Replay and capture the PNG sequence")))
 					.OnClicked_Lambda([this, Id]()
 					{

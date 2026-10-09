@@ -700,7 +700,8 @@ namespace UE_PIE_Automation
 				{
 					const uint64 FrameIdx = CaptureFrameCounter;
 					const FString FullPath = CaptureDir / FString::Printf(TEXT("frame_%05llu.png"), FrameIdx);
-					if (ViewportCapture->RequestCapture(FullPath, /*bDropIfBusy*/true))
+					// Backpressure keeps capture cadence intact when PNG encoding falls behind.
+					if (ViewportCapture->RequestCapture(FullPath))
 					{
 						++CaptureFrameCounter;
 					}

@@ -9,6 +9,7 @@
 #include "IImageWrapper.h"
 #include "IImageWrapperModule.h"
 #include "Modules/ModuleManager.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #endif
@@ -50,6 +51,7 @@ namespace UE_PIE_Automation
 
 	bool CopyReadbackRows(const FColor* Source, int32 RowPitchPixels, FIntPoint Size, TArray<FColor>& OutPixels)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(PIECapture_CopyReadbackRows);
 		if (!Source || RowPitchPixels < Size.X || Size.X <= 0 || Size.Y <= 0) return false;
 		OutPixels.SetNumUninitialized(Size.X * Size.Y);
 		for (int32 Y = 0; Y < Size.Y; ++Y)
@@ -61,6 +63,7 @@ namespace UE_PIE_Automation
 
 		bool EncodeColorsToFile(const TArray<FColor>& Pixels, int32 W, int32 H, bool bJpeg, int32 Quality, const FString& Path)
 		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(PIECapture_EncodeAndWrite);
 			IImageWrapperModule* IWM = FModuleManager::Get().GetModulePtr<IImageWrapperModule>(TEXT("ImageWrapper"));
 			if (IWM)
 			{
@@ -70,10 +73,15 @@ namespace UE_PIE_Automation
 				{
 					const int32 Compression = bJpeg
 						? FMath::Clamp(Quality, 1, 100)
-						: -FMath::Clamp(FMath::RoundToInt(Quality * 9.0f / 100.0f), 1, 9);
-					const TArray64<uint8>& Data = Wrapper->GetCompressed(Compression);
+						: -1; // Fast lossless PNG compression keeps replay capture from backing up.
+					TArray64<uint8> Data;
+					{
+						TRACE_CPUPROFILER_EVENT_SCOPE(PIECapture_Encode);
+						Data = Wrapper->GetCompressed(Compression);
+					}
 					if (Data.Num() > 0)
 					{
+						TRACE_CPUPROFILER_EVENT_SCOPE(PIECapture_WriteFile);
 						return FFileHelper::SaveArrayToFile(Data, *Path);
 					}
 				}
@@ -160,6 +168,7 @@ namespace UE_PIE_Automation
 		}
 		if (!bDropIfBusy)
 		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(PIECapture_QueueWait);
 			const double Deadline = FPlatformTime::Seconds() + CaptureTimeoutSeconds;
 			while (OutstandingCount.load(std::memory_order_acquire) >= MaxInFlightCaptures)
 			{
@@ -253,8 +262,9 @@ namespace UE_PIE_Automation
 		FSceneViewport* SceneViewport = PIEViewport ? PIEViewport->AsSceneViewport() : nullptr;
 		TSharedPtr<SViewport> Viewport = SceneViewport ? SceneViewport->GetViewportWidget().Pin() : nullptr;
 		FWidgetPath ViewportPath;
-		TSharedPtr<SWindow> Window = Viewport.IsValid()
-			? SlateApp.FindWidgetWindow(Viewport.ToSharedRef(), ViewportPath)
+		TSharedPtr<SWindow> Window = Viewport.IsValid() &&
+			SlateApp.GeneratePathToWidgetUnchecked(Viewport.ToSharedRef(), ViewportPath, EVisibility::All)
+			? ViewportPath.TopLevelWindow
 			: nullptr;
 		if (!Viewport.IsValid() || !Window.IsValid() || !ViewportPath.IsValid())
 		{
@@ -263,7 +273,7 @@ namespace UE_PIE_Automation
 			return;
 		}
 
-		// FindWidgetWindow builds this path from GetWindowGeometryInScreen(), so
+		// GeneratePathToWidget builds this path from GetWindowGeometryInScreen(), so
 		// convert its screen-space widget geometry through the same root. Mixing
 		// GetCachedGeometry() with window-local geometry offsets floating PIE crops.
 		const FGeometry WindowGeometry = Window->GetWindowGeometryInScreen();
@@ -316,8 +326,8 @@ namespace UE_PIE_Automation
 		if (!bEnabled.load(std::memory_order_acquire) || TargetWindow.load(std::memory_order_acquire) != &Window) return;
 
 		FCaptureRequest Request;
-		FVector2D ViewportOrigin;
-		FVector2D ViewportSize;
+		FVector2D ViewportOrigin = FVector2D::ZeroVector;
+		FVector2D ViewportSize = FVector2D::ZeroVector;
 		bool bHasRequest = false;
 		{
 			FScopeLock SL(&Lock);
